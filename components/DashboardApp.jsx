@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ACCENT_COLORS,
   BONUS_PRESET,
@@ -8,7 +8,6 @@ import {
   THEMES,
   deep,
   fmt,
-  getPayDates,
   normalizeState,
   pct
 } from "@/lib/dashboard-defaults";
@@ -392,22 +391,27 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
   }, [state]);
 
   const modeLeftover = useMemo(() => {
-    if (payMode === "p1") return totals.leftover;
+    // Both P1 and P2 show checking-only leftover so the number is consistent.
+    // P2 adds the p1Buffer (bills pre-paid by P1 that don't hit checking again).
     const checkingBills = state.bills.filter((bill) => bill.active && bill.rollsTo === null).reduce((sum, bill) => sum + (bill.amount || 0), 0);
     const tInvest = state.investments.filter((investment) => investment.active).reduce((sum, investment) => {
       const amount = investment.pct ? Math.round(state.paycheck * (investment.pct / 100) * 100) / 100 : investment.amount || 0;
       return sum + amount;
     }, 0);
-    return state.paycheck + (state.p1Buffer || 67.52) - checkingBills - tInvest - state.ccDebitAcct;
-  }, [payMode, state, totals.leftover]);
+    const buffer = payMode === "p2" ? (state.p1Buffer || 0) : 0;
+    return state.paycheck + buffer - checkingBills - tInvest - state.ccDebitAcct;
+  }, [payMode, state]);
+
+  // effectiveLeft = what actually remains in Chase after bills, factoring in existing balance
+  const effectiveLeft = modeLeftover + (state.chaseChecking || 0);
 
   const health = useMemo(() => {
-    const left = modeLeftover;
+    const left = effectiveLeft;
     if (left < 0) return { color: "#ef4444", label: "Over Budget", emoji: "🔴", bg: "rgba(239,68,68,.08)", border: "rgba(239,68,68,.3)" };
     if (left < 50) return { color: "#f97316", label: "Tight", emoji: "🟡", bg: "rgba(249,115,22,.08)", border: "rgba(249,115,22,.3)" };
     if (left < 150) return { color: "#eab308", label: "OK", emoji: "🟡", bg: "rgba(234,179,8,.08)", border: "rgba(234,179,8,.3)" };
     return { color: "#22c55e", label: "Healthy", emoji: "🟢", bg: "rgba(34,197,94,.08)", border: "rgba(34,197,94,.3)" };
-  }, [modeLeftover]);
+  }, [effectiveLeft]);
 
   const btInfo = useMemo(() => {
     const bt = state.balanceTransfer;
@@ -473,15 +477,8 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
     }));
   }, [state, totals.leftover]);
 
-  const timelineData = useMemo(() => getPayDates(state.payStartDate).map((date) => ({
-    date: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-    bills: totals.tBills,
-    invest: totals.tInvest,
-    left: Math.max(0, totals.leftover)
-  })), [state.payStartDate, totals]);
-
   const fidelity = [
-    { label: "Rent / Water", amount: state.bills.find((bill) => bill.id === "rent")?.amount || 0 },
+    { label: "Rent", amount: state.bills.find((bill) => bill.id === "rent")?.amount || 0 },
     { label: "Balance Transfer", amount: state.bills.find((bill) => bill.id === "balanceXfer")?.amount || 0 },
     { label: "CC Debit Acct", amount: state.ccDebitAcct },
     { label: "Travel Fund", amount: state.investments.find((investment) => investment.id === "travelFund")?.amount || 0 }
@@ -490,8 +487,10 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
   const checking = [
     { label: "Car Ins (Zelle)", amount: state.bills.find((bill) => bill.id === "carIns")?.amount || 0 },
     { label: "Internet (AT&T)", amount: state.bills.find((bill) => bill.id === "internet")?.amount || 0 },
+    { label: "Water Bill", amount: state.bills.find((bill) => bill.id === "water")?.amount || 0 },
     { label: "Packery", amount: state.bills.find((bill) => bill.id === "packery")?.amount || 0 },
-    { label: "Left Over", amount: Math.max(0, modeLeftover) }
+    { label: "Chase Balance", amount: state.chaseChecking || 0 },
+    { label: "What's Left", amount: Math.max(0, modeLeftover) }
   ];
 
   const dispatchCommands = useMemo(() => {
@@ -629,7 +628,9 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
               <span style={{ fontSize: 10 }}>{health.emoji}</span>
               <span>{health.label}</span>
               <span style={{ opacity: 0.6 }}>·</span>
-              <span>{fmt(modeLeftover)} left</span>
+              <span style={{ color: effectiveLeft < 0 ? "#ef4444" : "inherit" }}>
+                {fmt(Math.abs(effectiveLeft))} {effectiveLeft < 0 ? "short" : "left"}
+              </span>
             </div>
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <span className="pill" style={{ border: `1px solid ${statusTone.color}33`, color: statusTone.color, background: `${statusTone.color}14` }}>
@@ -650,7 +651,18 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
           <StatCard label="Bills" value={fmt(totals.tBills)} sub={`${pct(totals.tBills, state.paycheck)} of check`} color="#ef4444" />
           <StatCard label="Invested" value={fmt(totals.tInvest)} sub={`${totals.investPct}% of check`} color={accent} />
           <StatCard label="CC Debit" value={fmt(state.ccDebitAcct)} sub="Backend synced" color="#8b5cf6" />
-          <StatCard label="Left Over" value={fmt(Math.max(0, modeLeftover))} sub={payMode === "p2" ? "P2 w/ buffer" : "P1 view"} color={health.color} />
+          <StatCard
+            label="What's Left"
+            value={(effectiveLeft < 0 ? "-" : "") + fmt(Math.abs(effectiveLeft))}
+            sub={
+              effectiveLeft < 0
+                ? `⚠️ Deposit ${fmt(Math.abs(effectiveLeft))} to cover`
+                : payMode === "p2"
+                  ? `P2 + ${state.p1BufferLabel || "P1 buffer"} (${fmt(state.p1Buffer || 0)})`
+                  : "P1 view"
+            }
+            color={health.color}
+          />
         </div>
 
         <div className="animate-pop" key={activeTab}>
@@ -741,20 +753,86 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
                 <SliderRow label="Take-Home Pay" value={state.paycheck} onChange={(value) => setState((prev) => ({ ...prev, paycheck: value }))} min={1500} max={8000} step={25} color="#22c55e" />
               </div>
 
+              {payMode === "p1" ? (
+                <div className="card card-gold">
+                  <div className="sec-title">P1 Checking Buffer</div>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>
+                      This amount is credited to P2&apos;s left-over (already funded by P1).
+                      Set to <strong style={{ color: "#c9a84c" }}>$0</strong> if nothing carries forward this cycle.
+                    </div>
+                    <input
+                      className="input"
+                      placeholder="What does this buffer represent?"
+                      value={state.p1BufferLabel || ""}
+                      onChange={(e) => setState((prev) => ({ ...prev, p1BufferLabel: e.target.value }))}
+                      style={{ fontSize: 12, marginBottom: 12 }}
+                    />
+                  </div>
+                  <SliderRow
+                    label={state.p1BufferLabel || "P1 Buffer"}
+                    value={state.p1Buffer || 0}
+                    onChange={(value) => setState((prev) => ({ ...prev, p1Buffer: value }))}
+                    min={0}
+                    max={300}
+                    step={1}
+                    color="#c9a84c"
+                  />
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ marginTop: 4 }}
+                    onClick={() => setState((prev) => ({ ...prev, p1Buffer: 0 }))}
+                  >
+                    Zero Out Buffer
+                  </button>
+                </div>
+              ) : null}
+
               <div className="card">
                 <div className="sec-title">Bills</div>
                 {state.bills.filter((bill) => bill.active).map((bill) => (
-                  <SliderRow
-                    key={bill.id}
-                    label={bill.label}
-                    icon={bill.icon}
-                    value={bill.amount}
-                    onChange={(value) => updateBill(bill.id, value)}
-                    min={0}
-                    max={Math.max(bill.amount * 2.5, 300)}
-                    step={1}
-                    color={bill.account === "fidelity" ? "#3b82f6" : accent}
-                  />
+                  bill.id === "otherCarIns" ? (
+                    <React.Fragment key={bill.id}>
+                      <SliderRow
+                        label={bill.label}
+                        icon={bill.icon}
+                        value={bill.amount}
+                        onChange={(value) => updateBill(bill.id, value)}
+                        min={0}
+                        max={Math.max(bill.amount * 2.5, 300)}
+                        step={1}
+                        color={accent}
+                      />
+                      <div style={{ marginTop: -10, marginBottom: 14, paddingLeft: 4 }}>
+                        <input
+                          className="input"
+                          placeholder="What is this allocation for?"
+                          value={bill.label}
+                          onChange={(e) =>
+                            setState((prev) => ({
+                              ...prev,
+                              bills: prev.bills.map((b) =>
+                                b.id === "otherCarIns" ? { ...b, label: e.target.value } : b
+                              )
+                            }))
+                          }
+                          style={{ fontSize: 12, padding: "6px 12px", color: "#aaa" }}
+                        />
+                      </div>
+                    </React.Fragment>
+                  ) : (
+                    <SliderRow
+                      key={bill.id}
+                      label={bill.label}
+                      icon={bill.icon}
+                      value={bill.amount}
+                      onChange={(value) => updateBill(bill.id, value)}
+                      min={0}
+                      max={Math.max(bill.amount * 2.5, 300)}
+                      step={1}
+                      color={bill.account === "fidelity" ? "#3b82f6" : accent}
+                    />
+                  )
                 ))}
               </div>
 
@@ -832,19 +910,6 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
             </>
           ) : null}
 
-          {activeTab === "timeline" ? (
-            <>
-              <div className="card card-gold">
-                <div className="sec-title">Next 8 Pay Cycles</div>
-                <div className="row" style={{ marginBottom: 12, gap: 8 }}>
-                  <span style={{ fontSize: 11, color: "#666", letterSpacing: ".04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Start</span>
-                  <input type="date" className="input" style={{ flex: 1, padding: "7px 12px", fontSize: 13 }} value={state.payStartDate} onChange={(event) => setState((prev) => ({ ...prev, payStartDate: event.target.value }))} />
-                </div>
-                <StackedBars data={timelineData} accentColor={accent} />
-              </div>
-            </>
-          ) : null}
-
           {activeTab === "goals" ? (
             <>
               <div className="card card-gold">
@@ -893,6 +958,82 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
                   })} min={0} max={goal.target || 10000} step={25} color="#22c55e" />
                 </div>
               ))}
+
+              <div className="card card-gold">
+                <div className="sec-title">Chase Checking</div>
+                <div style={{ marginBottom: 12 }}>
+                  <span style={{ fontSize: 36, fontWeight: 900, color: health.color }}>
+                    {(state.chaseChecking || 0) < 0 ? "-" : ""}{fmt(Math.abs(state.chaseChecking || 0))}
+                  </span>
+                </div>
+                <MoneyInput
+                  label="Chase Checking Balance"
+                  value={state.chaseChecking || 0}
+                  onChange={(value) => setState((prev) => ({ ...prev, chaseChecking: value }))}
+                  color="#22c55e"
+                  note="Enter how much is currently sitting in your Chase account"
+                />
+
+                <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: `${health.bg}`, border: `1px solid ${health.border}` }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: effectiveLeft < 0 ? 10 : 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: health.color, letterSpacing: ".04em", textTransform: "uppercase" }}>
+                      {health.emoji} {health.label}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: health.color }}>
+                      {effectiveLeft >= 0 ? "+" : ""}{fmt(effectiveLeft)}
+                    </span>
+                  </div>
+
+                  {effectiveLeft < 0 ? (
+                    <div>
+                      <div style={{ fontSize: 11, color: "#aaa", marginBottom: 8 }}>
+                        Deposit <strong style={{ color: "#ef4444" }}>{fmt(Math.abs(effectiveLeft))}</strong> into Chase to break even.
+                        Or deposit more to reach a buffer:
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) }))}
+                          style={{ fontSize: 11, borderColor: "rgba(239,68,68,.3)", color: "#ef4444" }}
+                        >
+                          Break Even {fmt(Math.abs(modeLeftover))}
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) + 100 }))}
+                          style={{ fontSize: 11, borderColor: "rgba(249,115,22,.3)", color: "#f97316" }}
+                        >
+                          +$100 Buffer
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) + 250 }))}
+                          style={{ fontSize: 11, borderColor: "rgba(234,179,8,.3)", color: "#eab308" }}
+                        >
+                          +$250 Buffer
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: "#555", marginTop: effectiveLeft < 150 ? 4 : 0 }}>
+                      {effectiveLeft < 50
+                        ? "Very tight — consider adding a buffer before bills post."
+                        : effectiveLeft < 150
+                          ? "OK but thin — a small buffer is recommended."
+                          : "Covered. You have room to absorb unexpected charges."}
+                    </div>
+                  )}
+                </div>
+
+                {(state.travelCashback?.balance || 0) > 0 ? (
+                  <div style={{ marginTop: 10, fontSize: 11, color: "#555" }}>
+                    Chase + Travel Cashback:{" "}
+                    <span style={{ color: "#22c55e", fontWeight: 700 }}>
+                      {fmt((state.chaseChecking || 0) + (state.travelCashback?.balance || 0))}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
 
               <button onClick={() => setState((prev) => ({ ...prev, goals: [...(prev.goals || []), { id: `goal_${Date.now()}`, label: "New Goal", icon: "🎯", target: 1000, saved: 0, targetDate: "", color: "#c9a84c" }] }))} style={{ width: "calc(100% - 24px)", margin: "0 12px 10px", padding: "12px", background: "rgba(255,255,255,.03)", border: "1px dashed #2a2a2a", borderRadius: 12, color: "#555", fontSize: 12, fontWeight: 700, letterSpacing: ".06em", cursor: "pointer" }}>
                 + ADD GOAL
@@ -979,6 +1120,24 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
                   value={state.ccDebitBalance || 0}
                   onChange={(value) => setState((prev) => ({ ...prev, ccDebitBalance: value }))}
                   color="#8b5cf6"
+                />
+                <MoneyInput
+                  label="Chase Checking"
+                  value={state.chaseChecking || 0}
+                  onChange={(value) => setState((prev) => ({ ...prev, chaseChecking: value }))}
+                  color={health.color}
+                  note={
+                    effectiveLeft < 0
+                      ? `⚠️ Enter at least ${fmt(Math.abs(modeLeftover))} to break even`
+                      : `${health.emoji} ${health.label} · ${fmt(effectiveLeft)} remaining`
+                  }
+                />
+                <MoneyInput
+                  label={state.p1BufferLabel || "P1 Buffer"}
+                  value={state.p1Buffer || 0}
+                  onChange={(value) => setState((prev) => ({ ...prev, p1Buffer: value }))}
+                  color="#c9a84c"
+                  note="Credit to P2 left-over from P1"
                 />
               </div>
 
@@ -1101,7 +1260,6 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
             { id: "overview", icon: "🏠", label: "Home" },
             { id: "adjust", icon: "🎚", label: "Adjust" },
             { id: "scenarios", icon: "⚡", label: "Plans" },
-            { id: "timeline", icon: "📅", label: "Timeline" },
             { id: "goals", icon: "🎯", label: "Goals" },
             { id: "settings", icon: "⚙️", label: "Settings" }
           ].map((tab) => (
