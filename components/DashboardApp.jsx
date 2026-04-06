@@ -432,8 +432,13 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
   }, [state.goals]);
 
   const ccPlan = useMemo(() => {
-    const statements = state.ccStatements || { acc: 0, fcc: 0, ccc: 0 };
-    const total = (statements.acc || 0) + (statements.fcc || 0) + (statements.ccc || 0);
+    const statements = state.ccStatements || {};
+    const cardStatementEntries = state.creditCards.map((card) => ({
+      ...card,
+      statement: statements[card.id] || 0,
+      half: (statements[card.id] || 0) / 2
+    }));
+    const total = cardStatementEntries.reduce((sum, card) => sum + card.statement, 0);
     const perCycle = total / 2;
     const covered = state.ccDebitBalance || 0;
     const gap = Math.max(0, total - covered);
@@ -453,12 +458,10 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
       strk,
       twoPayBudget,
       monthlyGap,
-      accHalf: (statements.acc || 0) / 2,
-      fccHalf: (statements.fcc || 0) / 2,
-      cccHalf: (statements.ccc || 0) / 2,
+      cardStatementEntries,
       tc
     };
-  }, [state.ccStatements, state.ccDebitBalance, state.travelCashback, state.ccDebitAcct]);
+  }, [state.ccStatements, state.ccDebitBalance, state.creditCards, state.travelCashback, state.ccDebitAcct]);
 
   const pieData = useMemo(() => {
     const categories = {};
@@ -500,9 +503,10 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
 
     return [
       { command: `rent ${Math.round(rentBill?.amount || 0)}`, description: `Set ${rentBill?.label || "Rent"} to ${fmt(rentBill?.amount || 0)}` },
-      { command: `acc statement ${Math.round(state.ccStatements?.acc || 0)}`, description: "Update ACC statement balance" },
-      { command: `fcc statement ${Math.round(state.ccStatements?.fcc || 0)}`, description: "Update FCC statement balance" },
-      { command: `ccc statement ${Math.round(state.ccStatements?.ccc || 0)}`, description: "Update CCC statement balance" },
+      ...state.creditCards.map((card) => ({
+        command: `${card.id} statement ${Math.round(state.ccStatements?.[card.id] || 0)}`,
+        description: `Update ${card.label} statement balance`
+      })),
       { command: `travel cashback ${Math.round(state.travelCashback?.balance || 0)}`, description: "Update Travel/Cashback balance" },
       { command: `cc debit ${Math.round(state.ccDebitBalance || 0)}`, description: "Update CC debit balance" },
       { command: goalCommand, description: primaryGoal ? `Update ${primaryGoal.label} saved amount` : "Update goal saved amount" },
@@ -510,7 +514,7 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
       { command: "regular check", description: "Reset to regular" },
       { command: "i'm short", description: "Show what to cut" }
     ];
-  }, [state.bills, state.ccDebitBalance, state.ccStatements, state.goals, state.travelCashback]);
+  }, [state.bills, state.ccDebitBalance, state.ccStatements, state.creditCards, state.goals, state.travelCashback]);
 
   function showToast(message) {
     setToast(message);
@@ -923,9 +927,16 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
 
               <div className="card">
                 <div className="sec-title">CC Statement Planner</div>
-                <MoneyInput label="ACC Statement" value={state.ccStatements?.acc || 0} onChange={(value) => updateCCStat("acc", value)} color="#8b5cf6" note={`÷ 2 = ${fmt((state.ccStatements?.acc || 0) / 2)}/cycle`} />
-                <MoneyInput label="FCC Statement" value={state.ccStatements?.fcc || 0} onChange={(value) => updateCCStat("fcc", value)} color="#3b82f6" note={`÷ 2 = ${fmt((state.ccStatements?.fcc || 0) / 2)}/cycle`} />
-                <MoneyInput label="CCC Statement" value={state.ccStatements?.ccc || 0} onChange={(value) => updateCCStat("ccc", value)} color="#22c55e" note={`÷ 2 = ${fmt((state.ccStatements?.ccc || 0) / 2)}/cycle`} />
+                {state.creditCards.map((card) => (
+                  <MoneyInput
+                    key={card.id}
+                    label={`${card.label} Statement`}
+                    value={state.ccStatements?.[card.id] || 0}
+                    onChange={(value) => updateCCStat(card.id, value)}
+                    color={card.color}
+                    note={`÷ 2 = ${fmt((state.ccStatements?.[card.id] || 0) / 2)}/cycle`}
+                  />
+                ))}
               </div>
 
               {goalInfo.map((goal, index) => (
@@ -1088,27 +1099,16 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
                   onChange={(value) => updateBill("rent", value)}
                   color={accent}
                 />
-                <MoneyInput
-                  label="ACC Statement"
-                  value={state.ccStatements?.acc || 0}
-                  onChange={(value) => updateCCStat("acc", value)}
-                  color="#8b5cf6"
-                  note={`÷ 2 = ${fmt((state.ccStatements?.acc || 0) / 2)}/cycle`}
-                />
-                <MoneyInput
-                  label="FCC Statement"
-                  value={state.ccStatements?.fcc || 0}
-                  onChange={(value) => updateCCStat("fcc", value)}
-                  color="#3b82f6"
-                  note={`÷ 2 = ${fmt((state.ccStatements?.fcc || 0) / 2)}/cycle`}
-                />
-                <MoneyInput
-                  label="CCC Statement"
-                  value={state.ccStatements?.ccc || 0}
-                  onChange={(value) => updateCCStat("ccc", value)}
-                  color="#22c55e"
-                  note={`÷ 2 = ${fmt((state.ccStatements?.ccc || 0) / 2)}/cycle`}
-                />
+                {state.creditCards.map((card) => (
+                  <MoneyInput
+                    key={card.id}
+                    label={`${card.label} Statement`}
+                    value={state.ccStatements?.[card.id] || 0}
+                    onChange={(value) => updateCCStat(card.id, value)}
+                    color={card.color}
+                    note={`÷ 2 = ${fmt((state.ccStatements?.[card.id] || 0) / 2)}/cycle`}
+                  />
+                ))}
                 <MoneyInput
                   label="Travel Cashback"
                   value={state.travelCashback?.balance || 0}
