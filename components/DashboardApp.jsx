@@ -286,6 +286,21 @@ function toCommandLabel(value, fallback = "goal") {
   return label || fallback;
 }
 
+function getInvestmentAmount(investment, paycheck) {
+  if (!investment) return 0;
+  if (investment.id === "roth" && investment.pct && !investment.manualOverride) {
+    return Math.round((paycheck || 0) * (investment.pct / 100));
+  }
+  return Math.round((investment.amount || 0) * 100) / 100;
+}
+
+function getInvestmentLabel(investment) {
+  if (investment?.id === "roth" && investment.pct) {
+    return investment.manualOverride ? `${investment.label} (manual override)` : `${investment.label} (${investment.pct}% auto)`;
+  }
+  return investment?.label || "";
+}
+
 export default function DashboardApp({ initialDashboard, initialAudit, user }) {
   const [state, setStateRaw] = useState(() => normalizeState(initialDashboard.state));
   const [version, setVersion] = useState(initialDashboard.version);
@@ -381,10 +396,9 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
 
   const totals = useMemo(() => {
     const tBills = state.bills.filter((bill) => bill.active).reduce((sum, bill) => sum + (bill.amount || 0), 0);
-    const tInvest = state.investments.filter((investment) => investment.active).reduce((sum, investment) => {
-      const amount = investment.pct ? Math.round(state.paycheck * (investment.pct / 100) * 100) / 100 : investment.amount || 0;
-      return sum + amount;
-    }, 0);
+    const tInvest = state.investments
+      .filter((investment) => investment.active)
+      .reduce((sum, investment) => sum + getInvestmentAmount(investment, state.paycheck), 0);
     const tAlloc = tBills + tInvest + state.ccDebitAcct;
     const leftover = state.paycheck - tAlloc;
     return { tBills, tInvest, tAlloc, leftover, investPct: ((tInvest / state.paycheck) * 100).toFixed(1) };
@@ -394,10 +408,9 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
     // Both P1 and P2 show checking-only leftover so the number is consistent.
     // P2 adds the p1Buffer (bills pre-paid by P1 that don't hit checking again).
     const checkingBills = state.bills.filter((bill) => bill.active && bill.rollsTo === null).reduce((sum, bill) => sum + (bill.amount || 0), 0);
-    const tInvest = state.investments.filter((investment) => investment.active).reduce((sum, investment) => {
-      const amount = investment.pct ? Math.round(state.paycheck * (investment.pct / 100) * 100) / 100 : investment.amount || 0;
-      return sum + amount;
-    }, 0);
+    const tInvest = state.investments
+      .filter((investment) => investment.active)
+      .reduce((sum, investment) => sum + getInvestmentAmount(investment, state.paycheck), 0);
     const buffer = payMode === "p2" ? (state.p1Buffer || 0) : 0;
     return state.paycheck + buffer - checkingBills - tInvest - state.ccDebitAcct;
   }, [payMode, state]);
@@ -469,8 +482,9 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
       categories[bill.label] = (categories[bill.label] || 0) + bill.amount;
     });
     if (state.ccDebitAcct > 0) categories["CC Debit Acct"] = state.ccDebitAcct;
-    state.investments.filter((investment) => investment.active && investment.amount > 0).forEach((investment) => {
-      categories[investment.label] = investment.amount;
+    state.investments.filter((investment) => investment.active).forEach((investment) => {
+      const amount = getInvestmentAmount(investment, state.paycheck);
+      if (amount > 0) categories[investment.label] = amount;
     });
     if (totals.leftover > 0) categories["Left Over"] = totals.leftover;
     return Object.entries(categories).filter(([, value]) => value > 0).sort((a, b) => b[1] - a[1]).map(([name, value], index) => ({
@@ -525,7 +539,16 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
   }
 
   function updateInvest(id, amount) {
-    setState((prev) => ({ ...prev, investments: prev.investments.map((investment) => investment.id === id ? { ...investment, amount: +amount || 0 } : investment) }));
+    setState((prev) => ({
+      ...prev,
+      investments: prev.investments.map((investment) => {
+        if (investment.id !== id) return investment;
+        if (investment.id === "roth") {
+          return { ...investment, amount: +amount || 0, manualOverride: true };
+        }
+        return { ...investment, amount: +amount || 0 };
+      })
+    }));
   }
 
   function toggleBill(id) {
@@ -543,7 +566,14 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
         paycheck: BONUS_PRESET.paycheck,
         ccDebitAcct: BONUS_PRESET.ccDebitAcct,
         bills: prev.bills.map((bill) => ({ ...bill, amount: BONUS_PRESET.billOverrides[bill.id] ?? bill.amount })),
-        investments: prev.investments.map((investment) => ({ ...investment, amount: BONUS_PRESET.investOverrides[investment.id] ?? investment.amount })),
+        investments: prev.investments.map((investment) => {
+          const overrideAmount = BONUS_PRESET.investOverrides[investment.id];
+          if (overrideAmount == null) return investment;
+          if (investment.id === "roth") {
+            return { ...investment, amount: overrideAmount, manualOverride: true };
+          }
+          return { ...investment, amount: overrideAmount };
+        }),
         creditCards: prev.creditCards.map((card) => ({ ...card, balance: BONUS_PRESET.ccOverrides[card.id] ?? card.balance }))
       }));
       showToast("Bonus check loaded");
@@ -843,8 +873,8 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
               <div className="card">
                 <div className="sec-title">Investments</div>
                 {state.investments.filter((investment) => investment.active).map((investment) => {
-                  const amount = investment.pct ? Math.round(state.paycheck * (investment.pct / 100) * 100) / 100 : investment.amount || 0;
-                  const label = investment.pct ? `${investment.label} (${investment.pct}% auto)` : investment.label;
+                  const amount = getInvestmentAmount(investment, state.paycheck);
+                  const label = getInvestmentLabel(investment);
                   return (
                     <SliderRow key={investment.id} label={label} icon={investment.icon} value={amount} onChange={(value) => updateInvest(investment.id, value)} min={0} max={1000} step={10} color={accent} />
                   );
@@ -1052,6 +1082,201 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
             </>
           ) : null}
 
+          {activeTab === "ccpayments" ? (() => {
+            const totalMinimums = (state.creditCards || []).reduce((sum, card) => sum + (card.minPayment || 0), 0);
+            const ccDebitBal = state.ccDebitBalance || 0;
+            const shortfall = totalMinimums - ccDebitBal;
+            const fullyFunded = ccDebitBal >= totalMinimums;
+
+            return (
+              <div>
+                <div className="card card-gold" style={{ marginBottom: 16 }}>
+                  <div className="sec-title">💳 CC Minimum Payment Planner</div>
+                  <p style={{ fontSize: 12, color: "#888", marginBottom: 16 }}>
+                    Fund your CC Debit account from P1 so all minimum payments clear on time.
+                    Enter each card&apos;s minimum after your statement closes, then set your payment date.
+                  </p>
+
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                      Scheduled Payment Date
+                    </div>
+                    <input
+                      type="date"
+                      className="input"
+                      value={state.ccPaymentDate || ""}
+                      onChange={(event) => setState((prev) => ({ ...prev, ccPaymentDate: event.target.value }))}
+                      style={{ fontSize: 14, padding: "8px 12px", color: "#e2e8f0", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, width: "100%" }}
+                    />
+                    {state.ccPaymentDate ? (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#c9a84c" }}>
+                        📅 All 4 cards paid on{" "}
+                        {new Date(`${state.ccPaymentDate}T12:00:00`).toLocaleDateString("en-US", {
+                          weekday: "long",
+                          month: "long",
+                          day: "numeric",
+                          year: "numeric"
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#555" }}>
+                        Set a date to see your payment countdown
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="sec-title" style={{ marginBottom: 12 }}>Your Cards</div>
+
+                {(state.creditCards || []).map((card) => {
+                  const stmtBal = (state.ccStatements || {})[card.id] || 0;
+
+                  return (
+                    <div
+                      key={card.id}
+                      className="card"
+                      style={{ marginBottom: 12, borderLeft: `3px solid ${card.color || "#3b82f6"}`, paddingLeft: 16 }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: "50%", background: card.color || "#3b82f6", flexShrink: 0 }} />
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{card.label}</span>
+                        </div>
+                        {card.minPayment > 0 ? (
+                          <div style={{ fontSize: 11, color: "#22c55e", fontWeight: 700 }}>✅ Min set</div>
+                        ) : (
+                          <div style={{ fontSize: 11, color: "#f59e0b" }}>⏳ Enter minimum</div>
+                        )}
+                      </div>
+
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 10, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>
+                          Statement Balance
+                        </div>
+                        <MoneyInput
+                          label="Statement Balance"
+                          value={stmtBal}
+                          onChange={(value) =>
+                            setState((prev) => ({
+                              ...prev,
+                              ccStatements: { ...(prev.ccStatements || {}), [card.id]: value }
+                            }))
+                          }
+                          color={card.color || "#3b82f6"}
+                        />
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 10, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>
+                          Minimum Payment Due
+                        </div>
+                        <MoneyInput
+                          label="Minimum Due"
+                          value={card.minPayment || 0}
+                          onChange={(value) =>
+                            setState((prev) => ({
+                              ...prev,
+                              creditCards: (prev.creditCards || []).map((current) =>
+                                current.id === card.id ? { ...current, minPayment: value } : current
+                              )
+                            }))
+                          }
+                          color={card.color || "#3b82f6"}
+                          note="Enter minimum from your statement after it closes"
+                        />
+                      </div>
+
+                      {stmtBal > 0 && card.minPayment > 0 ? (
+                        <div style={{ marginTop: 6, fontSize: 11, color: "#444" }}>
+                          Min = {((card.minPayment / stmtBal) * 100).toFixed(1)}% of statement balance
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+
+                <div className="card card-gold" style={{ marginBottom: 16 }}>
+                  <div className="sec-title" style={{ marginBottom: 16 }}>💰 Fund Coverage</div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <span style={{ fontSize: 13, color: "#aaa" }}>Total Minimums Due</span>
+                    <span style={{ fontSize: 18, fontWeight: 900, color: "#e2e8f0" }}>{fmt(totalMinimums)}</span>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <span style={{ fontSize: 13, color: "#aaa" }}>CC Debit Account Balance</span>
+                    <span style={{ fontSize: 18, fontWeight: 900, color: "#3b82f6" }}>{fmt(ccDebitBal)}</span>
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: "12px 16px",
+                      borderRadius: 10,
+                      background: fullyFunded ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      border: `1px solid ${fullyFunded ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+                      textAlign: "center"
+                    }}
+                  >
+                    {totalMinimums === 0 ? (
+                      <>
+                        <div style={{ fontSize: 22 }}>⏳</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#f59e0b", marginTop: 4 }}>
+                          Enter minimums above to check coverage
+                        </div>
+                      </>
+                    ) : fullyFunded ? (
+                      <>
+                        <div style={{ fontSize: 22 }}>✅</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#22c55e", marginTop: 4 }}>Fully Funded</div>
+                        <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
+                          CC Debit covers all minimums with {fmt(ccDebitBal - totalMinimums)} to spare
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 22 }}>❌</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#ef4444", marginTop: 4 }}>
+                          Short {fmt(shortfall)}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>
+                          Transfer {fmt(shortfall)} more to CC Debit to cover all minimums
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="card" style={{ marginBottom: 24, borderLeft: "3px solid #c9a84c" }}>
+                  <div className="sec-title" style={{ marginBottom: 12 }}>📋 Transfer Reminder</div>
+                  <div style={{ fontSize: 13, color: "#aaa", lineHeight: 1.9 }}>
+                    <div>
+                      <span style={{ color: "#666" }}>Amount needed in CC Debit by payment date: </span>
+                      <span style={{ color: "#c9a84c", fontWeight: 700 }}>{fmt(totalMinimums)}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: "#666" }}>Funded from P1 paycheck allocation: </span>
+                      <span style={{ color: "#3b82f6", fontWeight: 700 }}>{fmt(state.ccDebitAcct || 0)}</span>
+                    </div>
+                    {state.ccPaymentDate ? (
+                      <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.2)", fontSize: 12, color: "#aaa" }}>
+                        💡 Schedule payment on{" "}
+                        <strong style={{ color: "#c9a84c" }}>
+                          {new Date(`${state.ccPaymentDate}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </strong>{" "}
+                        after Fidelity collection finalizes to ensure all 4 cards clear without a missed payment.
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 8, fontSize: 11, color: "#555" }}>
+                        Set a payment date above to see your full transfer reminder.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })() : null}
+
           {activeTab === "settings" ? (
             <>
               <div className="card">
@@ -1121,6 +1346,27 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
                   onChange={(value) => setState((prev) => ({ ...prev, ccDebitBalance: value }))}
                   color="#8b5cf6"
                 />
+                <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div style={{ fontSize: 10, color: "#555", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>
+                    CC Minimums
+                  </div>
+                  {(state.creditCards || []).map((card) => (
+                    <MoneyInput
+                      key={card.id}
+                      label={`${card.label} — Min Due`}
+                      value={card.minPayment || 0}
+                      onChange={(value) =>
+                        setState((prev) => ({
+                          ...prev,
+                          creditCards: (prev.creditCards || []).map((current) =>
+                            current.id === card.id ? { ...current, minPayment: value } : current
+                          )
+                        }))
+                      }
+                      color={card.color || "#3b82f6"}
+                    />
+                  ))}
+                </div>
                 <MoneyInput
                   label="Chase Checking"
                   value={state.chaseChecking || 0}
@@ -1261,6 +1507,7 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
             { id: "adjust", icon: "🎚", label: "Adjust" },
             { id: "scenarios", icon: "⚡", label: "Plans" },
             { id: "goals", icon: "🎯", label: "Goals" },
+            { id: "ccpayments", icon: "💳", label: "CC Payments" },
             { id: "settings", icon: "⚙️", label: "Settings" }
           ].map((tab) => (
             <button key={tab.id} className={`tab-btn${activeTab === tab.id ? " active" : ""}`} onClick={() => setActiveTab(tab.id)}>
