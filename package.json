@@ -7,13 +7,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "seed:admin": "node scripts/seed-admin.mjs"
+    "lint": "eslint . --max-warnings=0",
+    "seed:admin": "node scripts/seed-admin.mjs",
+    "test": "node --test",
+    "check": "npm run lint && npm test && npm run build && npm audit --audit-level=moderate"
   },
   "dependencies": {
-    "next": "15.2.9",
+    "next": "15.5.28",
     "pg": "8.13.1",
-    "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "overrides": {
+    "postcss": "8.5.31",
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2"
+  },
+  "devDependencies": {
+    "eslint": "10.13.0",
+    "@eslint/js": "10.0.1",
+    "globals": "16.4.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

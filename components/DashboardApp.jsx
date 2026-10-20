@@ -12,58 +12,77 @@ import {
   pct
 } from "@/lib/dashboard-defaults";
 
-function DonutChart({ data, size = 190, thickness = 26 }) {
+function PieAllocationChart({ data, size = 220 }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
   if (total === 0) return null;
 
-  const radius = (size - thickness) / 2;
-  const circumference = 2 * Math.PI * radius;
-  let cumulative = 0;
+  const center = size / 2;
+  const radius = size / 2 - 8;
+  let startAngle = -90;
   const slices = data.map((item) => {
     const portion = item.value / total;
-    const dash = circumference * portion;
-    const offset = circumference * (1 - cumulative);
-    cumulative += portion;
-    return { ...item, dash, gap: circumference - dash, offset };
+    const sweep = portion * 360;
+    const mid = startAngle + sweep / 2;
+    const slice = { ...item, portion, sweep, startAngle, endAngle: startAngle + sweep, mid };
+    startAngle += sweep;
+    return slice;
   });
 
-  const topFive = data.filter((item) => item.value > 0).sort((a, b) => b.value - a.value).slice(0, 5);
+  const toCartesian = (angle, r) => {
+    const rad = (angle * Math.PI) / 180;
+    return { x: center + r * Math.cos(rad), y: center + r * Math.sin(rad) };
+  };
+
+  const piePath = (slice) => {
+    if (slice.sweep >= 359.999) {
+      return `M ${center} ${center} m -${radius} 0 a ${radius} ${radius} 0 1 0 ${radius * 2} 0 a ${radius} ${radius} 0 1 0 -${radius * 2} 0 z`;
+    }
+    const start = toCartesian(slice.startAngle, radius);
+    const end = toCartesian(slice.endAngle, radius);
+    const largeArc = slice.sweep > 180 ? 1 : 0;
+    return `M ${center} ${center} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+  };
+
+  const topFive = slices.filter((item) => item.value > 0).sort((a, b) => b.value - a.value).slice(0, 5);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
       <svg width={size} height={size} style={{ flexShrink: 0 }}>
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(255,255,255,.05)" strokeWidth={thickness} />
-        <g transform={`translate(${size / 2},${size / 2}) rotate(-90)`}>
-          {slices.filter((slice) => slice.value > 0).map((slice) => (
-            <circle
-              key={slice.name}
-              cx={0}
-              cy={0}
-              r={radius}
-              fill="none"
-              stroke={slice.color}
-              strokeWidth={thickness}
-              strokeLinecap="round"
-              strokeDasharray={`${slice.dash - 1} ${slice.gap + 1}`}
-              strokeDashoffset={-slice.offset + circumference}
-            />
-          ))}
-        </g>
-        <text x={size / 2} y={size / 2 - 9} textAnchor="middle" fill="#f0f0f0" fontSize="15" fontWeight="800">
-          {fmt(total)}
-        </text>
-        <text x={size / 2} y={size / 2 + 10} textAnchor="middle" fill="#555" fontSize="9" fontWeight="700" letterSpacing="1">
-          TOTAL
-        </text>
+        {slices.map((slice) => (
+          <path key={slice.name} d={piePath(slice)} fill={slice.color} stroke="rgba(6,10,18,0.7)" strokeWidth="1.4" opacity="0.95" />
+        ))}
+        {slices.map((slice) => {
+          if (slice.portion < 0.08) return null;
+          const labelPos = toCartesian(slice.mid, radius * 0.58);
+          return (
+            <text
+              key={`${slice.name}-pct`}
+              x={labelPos.x}
+              y={labelPos.y}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill="#0d1117"
+              fontSize="11"
+              fontWeight="800"
+            >
+              {(slice.portion * 100).toFixed(0)}%
+            </text>
+          );
+        })}
       </svg>
       <div style={{ flex: 1, minWidth: 120 }}>
         {topFive.map((item) => (
-          <div key={item.name} style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+          <div key={item.name} style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
             <div style={{ width: 7, height: 7, borderRadius: 3.5, background: item.color, flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: "#999", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</span>
+            <span style={{ fontSize: 11, color: "#b2c0cf", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {item.name} {(item.portion * 100).toFixed(1)}%
+            </span>
             <span style={{ fontSize: 11, fontWeight: 700, color: item.color }}>{fmt(item.value)}</span>
           </div>
         ))}
+        <div style={{ marginTop: 6, fontSize: 11, color: "#7d8ca1", letterSpacing: ".04em" }}>
+          Total {fmt(total)}
+        </div>
       </div>
     </div>
   );
@@ -129,6 +148,15 @@ function StatCard({ label, value, sub, color = "#c9a84c" }) {
       {sub ? <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>{sub}</div> : null}
     </div>
   );
+}
+
+function getScenarioLeftoverDisplay(leftover) {
+  const amount = Number(leftover || 0);
+  const isShort = amount < 0;
+  return {
+    text: `${isShort ? "-" : ""}${fmt(Math.abs(amount))} ${isShort ? "short" : "left"}`,
+    color: isShort ? "#ef4444" : "#555"
+  };
 }
 
 function ProgressBar({ value, max, color = "#c9a84c", label, showAmounts = true }) {
@@ -426,14 +454,6 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
     return { color: "#22c55e", label: "Healthy", emoji: "🟢", bg: "rgba(34,197,94,.08)", border: "rgba(34,197,94,.3)" };
   }, [effectiveLeft]);
 
-  const btInfo = useMemo(() => {
-    const bt = state.balanceTransfer;
-    const end = new Date(bt.zeroEndDate);
-    const now = new Date();
-    const moLeft = Math.max(0, Math.floor((end - now) / (1000 * 60 * 60 * 24 * 30.44)));
-    return { moLeft, util: ((bt.current / bt.limit) * 100).toFixed(1), avail: bt.limit - bt.current };
-  }, [state.balanceTransfer]);
-
   const goalInfo = useMemo(() => {
     const now = new Date();
     return (state.goals || []).map((goal) => {
@@ -487,11 +507,14 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
       if (amount > 0) categories[investment.label] = amount;
     });
     if (totals.leftover > 0) categories["Left Over"] = totals.leftover;
-    return Object.entries(categories).filter(([, value]) => value > 0).sort((a, b) => b[1] - a[1]).map(([name, value], index) => ({
-      name,
-      value,
-      color: PIE_COLORS[index % PIE_COLORS.length]
-    }));
+    return Object.entries(categories)
+      .filter(([, value]) => value > 0)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, value], index) => ({
+        name,
+        value,
+        color: PIE_COLORS[index % PIE_COLORS.length]
+      }));
   }, [state, totals.leftover]);
 
   const fidelity = [
@@ -652,526 +675,718 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
   return (
     <>
       <div id="root">
-        <div className="topbar">
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 800, color: "#444", letterSpacing: ".18em", textTransform: "uppercase", marginBottom: 10 }}>
-              CodexPaycheckDashboard · {payMode === "p1" ? "Paycheck 1" : "Paycheck 2"}
-            </div>
-            <div className="hero-number" style={{ color: health.color }}>{fmt(state.paycheck)}</div>
-            <div className="health-pill" style={{ background: health.bg, borderColor: health.border, color: health.color }}>
-              <span style={{ fontSize: 10 }}>{health.emoji}</span>
-              <span>{health.label}</span>
-              <span style={{ opacity: 0.6 }}>·</span>
-              <span style={{ color: effectiveLeft < 0 ? "#ef4444" : "inherit" }}>
-                {fmt(Math.abs(effectiveLeft))} {effectiveLeft < 0 ? "short" : "left"}
-              </span>
-            </div>
-            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span className="pill" style={{ border: `1px solid ${statusTone.color}33`, color: statusTone.color, background: `${statusTone.color}14` }}>
-                {statusTone.label}
-              </span>
-              <span style={{ fontSize: 11, color: "#666" }}>{user.email}</span>
-            </div>
-          </div>
-          <div style={{ textAlign: "right", paddingTop: 4 }}>
-            <Toggle checked={isBonus} onChange={handleBonus} color={accent} />
-            <div style={{ fontSize: 10, color: "#444", marginTop: 6, letterSpacing: ".06em", textTransform: "uppercase" }}>
-              {isBonus ? "Bonus" : "Regular"}
-            </div>
-          </div>
-        </div>
-
-        <div className="stat-grid">
-          <StatCard label="Bills" value={fmt(totals.tBills)} sub={`${pct(totals.tBills, state.paycheck)} of check`} color="#ef4444" />
-          <StatCard label="Invested" value={fmt(totals.tInvest)} sub={`${totals.investPct}% of check`} color={accent} />
-          <StatCard label="CC Debit" value={fmt(state.ccDebitAcct)} sub="Backend synced" color="#8b5cf6" />
-          <StatCard
-            label="What's Left"
-            value={(effectiveLeft < 0 ? "-" : "") + fmt(Math.abs(effectiveLeft))}
-            sub={
-              effectiveLeft < 0
-                ? `⚠️ Deposit ${fmt(Math.abs(effectiveLeft))} to cover`
-                : payMode === "p2"
-                  ? `P2 + ${state.p1BufferLabel || "P1 buffer"} (${fmt(state.p1Buffer || 0)})`
-                  : "P1 view"
-            }
-            color={health.color}
-          />
-        </div>
-
-        <div className="animate-pop" key={activeTab}>
-          {activeTab === "overview" ? (
-            <>
-              <div className="card card-gold">
-                <div className="sec-title">CC Statement Planner</div>
-                <div className="row-between" style={{ marginBottom: 8 }}>
-                  <span style={{ fontSize: 11, color: "#888" }}>Total Statements</span>
-                  <span style={{ fontSize: 18, fontWeight: 800, color: "#ef4444" }}>{fmt(ccPlan.total)}</span>
+        <div className="shell-layout">
+          <aside className="summary-rail">
+            <div className="topbar">
+              <div>
+                <div className="topbar-meta">
+                  CodexPaycheckDashboard · {payMode === "p1" ? "Paycheck 1" : "Paycheck 2"}
                 </div>
-                <div className="row-between" style={{ marginBottom: 8 }}>
-                  <span style={{ fontSize: 11, color: "#888" }}>In CC Debit Acct</span>
-                  <span style={{ fontSize: 18, fontWeight: 800, color: ccPlan.covered >= ccPlan.total ? "#22c55e" : accent }}>{fmt(ccPlan.covered)}</span>
-                </div>
-                <div className="divider" />
-                {ccPlan.gap > 0 ? (
-                  <div className="alert-orange" style={{ marginTop: 10, fontSize: 11, color: "#fdba74" }}>
-                    Pull {fmt(ccPlan.gap)} from Travel/Cashback. Leaves {fmt(ccPlan.tcAfter)}.
-                  </div>
-                ) : (
-                  <div className="alert-green" style={{ marginTop: 10, fontSize: 11, color: "#86efac" }}>
-                    Fully covered. {fmt(ccPlan.covered - ccPlan.total)} surplus in CC Debit Acct.
-                  </div>
-                )}
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Allocation Breakdown</div>
-                <DonutChart data={pieData} size={180} thickness={24} />
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Account Flow</div>
-                {[
-                  { dest: "Fidelity", color: "#3b82f6", items: fidelity },
-                  { dest: "Chase Checking", color: "#22c55e", items: checking }
-                ].map((account) => (
-                  <div key={account.dest} style={{ marginBottom: 14 }}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: account.color, marginBottom: 6, letterSpacing: ".1em", textTransform: "uppercase" }}>
-                      {account.dest}
-                    </div>
-                    {account.items.filter((item) => item.amount > 0).map((item) => (
-                      <div key={item.label} className="bill-row row-between">
-                        <span style={{ fontSize: 12, color: "#999" }}>{item.label}</span>
-                        <span style={{ fontSize: 13, color: account.color, fontWeight: 700 }}>{fmt(item.amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Credit Card Statements</div>
-                {state.creditCards.map((card) => {
-                  const statement = state.ccStatements?.[card.id] || 0;
-                  return (
-                    <div key={card.id} style={{ marginBottom: 14 }}>
-                      <div className="row-between" style={{ marginBottom: 4 }}>
-                        <div>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: "#ddd" }}>{card.label}</span>
-                          <div style={{ fontSize: 10, color: "#555", marginTop: 1 }}>Half target {fmt(statement / 2)}</div>
-                        </div>
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{ fontSize: 16, fontWeight: 800, color: card.color }}>{fmt(statement)}</div>
-                          <div style={{ fontSize: 10, color: "#444", marginTop: 1 }}>statement balance</div>
-                        </div>
-                      </div>
-                      <ProgressBar value={statement / 2} max={statement || 1} color={card.color} showAmounts={false} />
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : null}
-
-          {activeTab === "adjust" ? (
-            <>
-              <div style={{ padding: "12px 12px 0" }}>
-                <div className="mode-tab">
-                  <button className={`mode-btn${payMode === "p1" ? " active" : ""}`} onClick={() => setPayMode("p1")}>Paycheck 1</button>
-                  <button className={`mode-btn${payMode === "p2" ? " active" : ""}`} onClick={() => setPayMode("p2")}>Paycheck 2</button>
-                </div>
-              </div>
-
-              <div className="card card-gold">
-                <div className="sec-title">Paycheck</div>
-                <SliderRow label="Take-Home Pay" value={state.paycheck} onChange={(value) => setState((prev) => ({ ...prev, paycheck: value }))} min={1500} max={8000} step={25} color="#22c55e" />
-              </div>
-
-              {payMode === "p1" ? (
-                <div className="card card-gold">
-                  <div className="sec-title">P1 Checking Buffer</div>
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>
-                      This amount is credited to P2&apos;s left-over (already funded by P1).
-                      Set to <strong style={{ color: "#c9a84c" }}>$0</strong> if nothing carries forward this cycle.
-                    </div>
-                    <input
-                      className="input"
-                      placeholder="What does this buffer represent?"
-                      value={state.p1BufferLabel || ""}
-                      onChange={(e) => setState((prev) => ({ ...prev, p1BufferLabel: e.target.value }))}
-                      style={{ fontSize: 12, marginBottom: 12 }}
-                    />
-                  </div>
-                  <SliderRow
-                    label={state.p1BufferLabel || "P1 Buffer"}
-                    value={state.p1Buffer || 0}
-                    onChange={(value) => setState((prev) => ({ ...prev, p1Buffer: value }))}
-                    min={0}
-                    max={300}
-                    step={1}
-                    color="#c9a84c"
-                  />
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    style={{ marginTop: 4 }}
-                    onClick={() => setState((prev) => ({ ...prev, p1Buffer: 0 }))}
-                  >
-                    Zero Out Buffer
-                  </button>
-                </div>
-              ) : null}
-
-              <div className="card">
-                <div className="sec-title">Bills</div>
-                {state.bills.filter((bill) => bill.active).map((bill) => (
-                  bill.id === "otherCarIns" ? (
-                    <React.Fragment key={bill.id}>
-                      <SliderRow
-                        label={bill.label}
-                        icon={bill.icon}
-                        value={bill.amount}
-                        onChange={(value) => updateBill(bill.id, value)}
-                        min={0}
-                        max={Math.max(bill.amount * 2.5, 300)}
-                        step={1}
-                        color={accent}
-                      />
-                      <div style={{ marginTop: -10, marginBottom: 14, paddingLeft: 4 }}>
-                        <input
-                          className="input"
-                          placeholder="What is this allocation for?"
-                          value={bill.label}
-                          onChange={(e) =>
-                            setState((prev) => ({
-                              ...prev,
-                              bills: prev.bills.map((b) =>
-                                b.id === "otherCarIns" ? { ...b, label: e.target.value } : b
-                              )
-                            }))
-                          }
-                          style={{ fontSize: 12, padding: "6px 12px", color: "#aaa" }}
-                        />
-                      </div>
-                    </React.Fragment>
-                  ) : (
-                    <SliderRow
-                      key={bill.id}
-                      label={bill.label}
-                      icon={bill.icon}
-                      value={bill.amount}
-                      onChange={(value) => updateBill(bill.id, value)}
-                      min={0}
-                      max={Math.max(bill.amount * 2.5, 300)}
-                      step={1}
-                      color={bill.account === "fidelity" ? "#3b82f6" : accent}
-                    />
-                  )
-                ))}
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Investments</div>
-                {state.investments.filter((investment) => investment.active).map((investment) => {
-                  const amount = getInvestmentAmount(investment, state.paycheck);
-                  const label = getInvestmentLabel(investment);
-                  return (
-                    <SliderRow key={investment.id} label={label} icon={investment.icon} value={amount} onChange={(value) => updateInvest(investment.id, value)} min={0} max={1000} step={10} color={accent} />
-                  );
-                })}
-              </div>
-
-              <div className="card">
-                <div className="sec-title">CC Debit Acct</div>
-                <SliderRow label="CC Debit Transfer" value={state.ccDebitAcct} onChange={(value) => setState((prev) => ({ ...prev, ccDebitAcct: value }))} min={0} max={3500} step={25} color="#8b5cf6" />
-                <div style={{ fontSize: 11, color: "#555" }}>
-                  Target this cycle: <span style={{ color: accent, fontWeight: 700 }}>{fmt(ccPlan.perCycle)}</span>
-                </div>
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Toggle Bills On / Off</div>
-                {state.bills.map((bill) => (
-                  <div key={bill.id} className="bill-row row-between">
-                    <span style={{ fontSize: 13, color: bill.active ? "#e0e0e0" : "#444" }}>{bill.icon} {bill.label}</span>
-                    <Toggle checked={bill.active} onChange={() => toggleBill(bill.id)} color={accent} />
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          {activeTab === "scenarios" ? (
-            <>
-              <div className="card card-gold">
-                <div className="sec-title">Save Snapshot</div>
-                <div className="row" style={{ gap: 8 }}>
-                  <input className="input" placeholder="Scenario name..." value={scenarioName} onChange={(event) => setScenarioName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveScenario()} style={{ flex: 1 }} />
-                  <button className="btn btn-primary" onClick={saveScenario}>Save</button>
-                </div>
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Quick Presets</div>
-                {[
-                  { label: "Cut Packery → Travel Fund", action: () => { updateBill("packery", 0); updateInvest("travelFund", (state.investments.find((investment) => investment.id === "travelFund")?.amount || 0) + 75); showToast("Packery cut → Travel Fund +$75"); } },
-                  { label: "Emergency: Zero Investments", action: () => state.investments.forEach((investment) => updateInvest(investment.id, 0)) },
-                  { label: "Max Brazil Savings", action: () => { const amount = Math.max(0, totals.leftover - 50); updateInvest("travelFund", (state.investments.find((investment) => investment.id === "travelFund")?.amount || 0) + amount); showToast(`+${fmt(amount)} to Travel Fund`); } }
-                ].map((preset) => (
-                  <button key={preset.label} onClick={preset.action} className="btn btn-ghost" style={{ width: "100%", justifyContent: "flex-start", marginBottom: 6 }}>
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Saved Scenarios</div>
-                {(state.scenarios || []).length === 0 ? (
-                  <div style={{ fontSize: 12, color: "#666" }}>No scenarios yet.</div>
-                ) : (state.scenarios || []).map((scenario) => (
-                  <div key={scenario.id} className="bill-row row-between">
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#e0e0e0" }}>{scenario.name}</div>
-                      <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{scenario.savedAt} · {fmt(scenario.paycheck)} · {fmt(scenario.leftover)} left</div>
-                    </div>
-                    <div className="row" style={{ gap: 6 }}>
-                      <button className="btn btn-primary btn-sm" onClick={() => loadScenario(scenario)}>Load</button>
-                      <button className="btn btn-danger btn-sm" onClick={() => deleteScenario(scenario.id)}>✕</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          {activeTab === "goals" ? (
-            <>
-              <div className="card card-gold">
-                <div className="sec-title">Travel / Cashback Account</div>
-                <div style={{ marginBottom: 12 }}>
-                  <span style={{ fontSize: 36, fontWeight: 900, color: accent }}>{fmt(ccPlan.tc.balance)}</span>
-                </div>
-                <MoneyInput label="Account Balance" value={ccPlan.tc.balance} onChange={(value) => setState((prev) => ({ ...prev, travelCashback: { ...prev.travelCashback, balance: value } }))} color={accent} />
-                <MoneyInput label="CC Debit Acct Balance" value={state.ccDebitBalance || 0} onChange={(value) => setState((prev) => ({ ...prev, ccDebitBalance: value }))} color="#8b5cf6" />
-              </div>
-
-              <div className="card">
-                <div className="sec-title">CC Statement Planner</div>
-                {state.creditCards.map((card) => (
-                  <MoneyInput
-                    key={card.id}
-                    label={`${card.label} Statement`}
-                    value={state.ccStatements?.[card.id] || 0}
-                    onChange={(value) => updateCCStat(card.id, value)}
-                    color={card.color}
-                    note={`÷ 2 = ${fmt((state.ccStatements?.[card.id] || 0) / 2)}/cycle`}
-                  />
-                ))}
-              </div>
-
-              {goalInfo.map((goal, index) => (
-                <div key={goal.id} className="card card-gold" style={{ borderTopColor: `${goal.color}44` }}>
-                  <div className="row-between" style={{ marginBottom: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input value={goal.icon || "🎯"} onChange={(event) => setState((prev) => {
-                        const items = [...prev.goals];
-                        items[index] = { ...items[index], icon: event.target.value };
-                        return { ...prev, goals: items };
-                      })} style={{ background: "transparent", border: "none", fontSize: 20, width: 36, outline: "none" }} maxLength={4} />
-                      <input value={goal.label} onChange={(event) => setState((prev) => {
-                        const items = [...prev.goals];
-                        items[index] = { ...items[index], label: event.target.value };
-                        return { ...prev, goals: items };
-                      })} style={{ background: "transparent", border: "none", borderBottom: "1px solid #333", color: "#ddd", fontSize: 13, fontWeight: 700, outline: "none", padding: "2px 0", width: 160 }} />
-                    </div>
-                    <button className="btn btn-danger btn-sm" onClick={() => setState((prev) => ({ ...prev, goals: prev.goals.filter((_, itemIndex) => itemIndex !== index) }))}>Delete</button>
-                  </div>
-                  <ProgressBar value={goal.saved || 0} max={goal.target || 1} color={goal.color || accent} label={goal.label} />
-                  <SliderRow label="Goal Amount" value={goal.target || 0} onChange={(value) => setState((prev) => {
-                    const items = [...prev.goals];
-                    items[index] = { ...items[index], target: value };
-                    return { ...prev, goals: items };
-                  })} min={100} max={10000} step={100} color={goal.color || accent} />
-                  <SliderRow label="Already Saved" value={goal.saved || 0} onChange={(value) => setState((prev) => {
-                    const items = [...prev.goals];
-                    items[index] = { ...items[index], saved: value };
-                    return { ...prev, goals: items };
-                  })} min={0} max={goal.target || 10000} step={25} color="#22c55e" />
-                </div>
-              ))}
-
-              <div className="card card-gold">
-                <div className="sec-title">Chase Checking</div>
-                <div style={{ marginBottom: 12 }}>
-                  <span style={{ fontSize: 36, fontWeight: 900, color: health.color }}>
-                    {(state.chaseChecking || 0) < 0 ? "-" : ""}{fmt(Math.abs(state.chaseChecking || 0))}
+                <div className="hero-number" style={{ color: health.color }}>{fmt(state.paycheck)}</div>
+                <div className="health-pill" style={{ background: health.bg, borderColor: health.border, color: health.color }}>
+                  <span style={{ fontSize: 10 }}>{health.emoji}</span>
+                  <span>{health.label}</span>
+                  <span style={{ opacity: 0.6 }}>·</span>
+                  <span style={{ color: effectiveLeft < 0 ? "#ef4444" : "inherit" }}>
+                    {fmt(Math.abs(effectiveLeft))} {effectiveLeft < 0 ? "short" : "left"}
                   </span>
                 </div>
-                <MoneyInput
-                  label="Chase Checking Balance"
-                  value={state.chaseChecking || 0}
-                  onChange={(value) => setState((prev) => ({ ...prev, chaseChecking: value }))}
-                  color="#22c55e"
-                  note="Enter how much is currently sitting in your Chase account"
-                />
-
-                <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: `${health.bg}`, border: `1px solid ${health.border}` }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: effectiveLeft < 0 ? 10 : 0 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: health.color, letterSpacing: ".04em", textTransform: "uppercase" }}>
-                      {health.emoji} {health.label}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: health.color }}>
-                      {effectiveLeft >= 0 ? "+" : ""}{fmt(effectiveLeft)}
-                    </span>
-                  </div>
-
-                  {effectiveLeft < 0 ? (
-                    <div>
-                      <div style={{ fontSize: 11, color: "#aaa", marginBottom: 8 }}>
-                        Deposit <strong style={{ color: "#ef4444" }}>{fmt(Math.abs(effectiveLeft))}</strong> into Chase to break even.
-                        Or deposit more to reach a buffer:
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) }))}
-                          style={{ fontSize: 11, borderColor: "rgba(239,68,68,.3)", color: "#ef4444" }}
-                        >
-                          Break Even {fmt(Math.abs(modeLeftover))}
-                        </button>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) + 100 }))}
-                          style={{ fontSize: 11, borderColor: "rgba(249,115,22,.3)", color: "#f97316" }}
-                        >
-                          +$100 Buffer
-                        </button>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) + 250 }))}
-                          style={{ fontSize: 11, borderColor: "rgba(234,179,8,.3)", color: "#eab308" }}
-                        >
-                          +$250 Buffer
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 11, color: "#555", marginTop: effectiveLeft < 150 ? 4 : 0 }}>
-                      {effectiveLeft < 50
-                        ? "Very tight — consider adding a buffer before bills post."
-                        : effectiveLeft < 150
-                          ? "OK but thin — a small buffer is recommended."
-                          : "Covered. You have room to absorb unexpected charges."}
-                    </div>
-                  )}
+                <div className="health-row">
+                  <span className="pill" style={{ border: `1px solid ${statusTone.color}33`, color: statusTone.color, background: `${statusTone.color}14` }}>
+                    {statusTone.label}
+                  </span>
+                  <span className="user-chip">{user.email}</span>
                 </div>
-
-                {(state.travelCashback?.balance || 0) > 0 ? (
-                  <div style={{ marginTop: 10, fontSize: 11, color: "#555" }}>
-                    Chase + Travel Cashback:{" "}
-                    <span style={{ color: "#22c55e", fontWeight: 700 }}>
-                      {fmt((state.chaseChecking || 0) + (state.travelCashback?.balance || 0))}
-                    </span>
-                  </div>
-                ) : null}
               </div>
+              <div className="topbar-side">
+                <Toggle checked={isBonus} onChange={handleBonus} color={accent} />
+                <div className="topbar-side-label">{isBonus ? "Bonus" : "Regular"}</div>
+              </div>
+            </div>
+            <div className="stat-grid">
+              <StatCard label="Bills" value={fmt(totals.tBills)} sub={`${pct(totals.tBills, state.paycheck)} of check`} color="#ef4444" />
+              <StatCard label="Invested" value={fmt(totals.tInvest)} sub={`${totals.investPct}% of check`} color={accent} />
+              <StatCard label="CC Debit" value={fmt(state.ccDebitAcct)} sub="Backend synced" color="#8b5cf6" />
+              <StatCard
+                label="What's Left"
+                value={(effectiveLeft < 0 ? "-" : "") + fmt(Math.abs(effectiveLeft))}
+                sub={
+                  effectiveLeft < 0
+                    ? `⚠️ Deposit ${fmt(Math.abs(effectiveLeft))} to cover`
+                    : payMode === "p2"
+                      ? `P2 + ${state.p1BufferLabel || "P1 buffer"} (${fmt(state.p1Buffer || 0)})`
+                      : "P1 view"
+                }
+                color={health.color}
+              />
+            </div>
 
-              <button onClick={() => setState((prev) => ({ ...prev, goals: [...(prev.goals || []), { id: `goal_${Date.now()}`, label: "New Goal", icon: "🎯", target: 1000, saved: 0, targetDate: "", color: "#c9a84c" }] }))} style={{ width: "calc(100% - 24px)", margin: "0 12px 10px", padding: "12px", background: "rgba(255,255,255,.03)", border: "1px dashed #2a2a2a", borderRadius: 12, color: "#555", fontSize: 12, fontWeight: 700, letterSpacing: ".06em", cursor: "pointer" }}>
-                + ADD GOAL
-              </button>
-            </>
-          ) : null}
+            <div className="tabbar">
+              {[
+                { id: "overview", icon: "🏠", label: "Home" },
+                { id: "adjust", icon: "🎚", label: "Adjust" },
+                { id: "scenarios", icon: "⚡", label: "Plans" },
+                { id: "goals", icon: "🎯", label: "Goals" },
+                { id: "ccpayments", icon: "💳", label: "CC Payments" },
+                { id: "settings", icon: "⚙️", label: "Settings" }
+              ].map((tab) => (
+                <button key={tab.id} className={`tab-btn${activeTab === tab.id ? " active" : ""}`} onClick={() => setActiveTab(tab.id)}>
+                  <span className="tab-icon">{tab.icon}</span>
+                  <span>{tab.label}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
 
-          {activeTab === "ccpayments" ? (() => {
-            const totalMinimums = (state.creditCards || []).reduce((sum, card) => sum + (card.minPayment || 0), 0);
-            const ccDebitBal = state.ccDebitBalance || 0;
-            const shortfall = totalMinimums - ccDebitBal;
-            const fullyFunded = ccDebitBal >= totalMinimums;
-
-            return (
-              <div>
-                <div className="card card-gold" style={{ marginBottom: 16 }}>
-                  <div className="sec-title">💳 CC Minimum Payment Planner</div>
-                  <p style={{ fontSize: 12, color: "#888", marginBottom: 16 }}>
-                    Fund your CC Debit account from P1 so all minimum payments clear on time.
-                    Enter each card&apos;s minimum after your statement closes, then set your payment date.
-                  </p>
-
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
-                      Scheduled Payment Date
+          <section className="content-rail">
+            <div className="animate-pop" key={activeTab}>
+              {activeTab === "overview" ? (
+                <>
+                  <div className="card card-gold">
+                    <div className="sec-title">CC Statement Planner</div>
+                    <div className="row-between" style={{ marginBottom: 8 }}>
+                      <span style={{ fontSize: 11, color: "#888" }}>Total Statements</span>
+                      <span style={{ fontSize: 18, fontWeight: 800, color: "#ef4444" }}>{fmt(ccPlan.total)}</span>
                     </div>
-                    <input
-                      type="date"
-                      className="input"
-                      value={state.ccPaymentDate || ""}
-                      onChange={(event) => setState((prev) => ({ ...prev, ccPaymentDate: event.target.value }))}
-                      style={{ fontSize: 14, padding: "8px 12px", color: "#e2e8f0", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, width: "100%" }}
-                    />
-                    {state.ccPaymentDate ? (
-                      <div style={{ marginTop: 6, fontSize: 11, color: "#c9a84c" }}>
-                        📅 All 4 cards paid on{" "}
-                        {new Date(`${state.ccPaymentDate}T12:00:00`).toLocaleDateString("en-US", {
-                          weekday: "long",
-                          month: "long",
-                          day: "numeric",
-                          year: "numeric"
-                        })}
+                    <div className="row-between" style={{ marginBottom: 8 }}>
+                      <span style={{ fontSize: 11, color: "#888" }}>In CC Debit Acct</span>
+                      <span style={{ fontSize: 18, fontWeight: 800, color: ccPlan.covered >= ccPlan.total ? "#22c55e" : accent }}>{fmt(ccPlan.covered)}</span>
+                    </div>
+                    <div className="divider" />
+                    {ccPlan.gap > 0 ? (
+                      <div className="alert-orange" style={{ marginTop: 10, fontSize: 11, color: "#fdba74" }}>
+                        Pull {fmt(ccPlan.gap)} from Travel/Cashback. Leaves {fmt(ccPlan.tcAfter)}.
                       </div>
                     ) : (
-                      <div style={{ marginTop: 6, fontSize: 11, color: "#555" }}>
-                        Set a date to see your payment countdown
+                      <div className="alert-green" style={{ marginTop: 10, fontSize: 11, color: "#86efac" }}>
+                        Fully covered. {fmt(ccPlan.covered - ccPlan.total)} surplus in CC Debit Acct.
                       </div>
                     )}
                   </div>
-                </div>
 
-                <div className="sec-title" style={{ marginBottom: 12 }}>Your Cards</div>
+                  <div className="card">
+                    <div className="sec-title">Allocation Breakdown</div>
+                    <PieAllocationChart data={pieData} size={180} />
+                  </div>
 
-                {(state.creditCards || []).map((card) => {
-                  const stmtBal = (state.ccStatements || {})[card.id] || 0;
-
-                  return (
-                    <div
-                      key={card.id}
-                      className="card"
-                      style={{ marginBottom: 12, borderLeft: `3px solid ${card.color || "#3b82f6"}`, paddingLeft: 16 }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ width: 10, height: 10, borderRadius: "50%", background: card.color || "#3b82f6", flexShrink: 0 }} />
-                          <span style={{ fontWeight: 700, fontSize: 14 }}>{card.label}</span>
+                  <div className="card">
+                    <div className="sec-title">Account Flow</div>
+                    {[
+                      { dest: "Fidelity", color: "#3b82f6", items: fidelity },
+                      { dest: "Chase Checking", color: "#22c55e", items: checking }
+                    ].map((account) => (
+                      <div key={account.dest} style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 10, fontWeight: 800, color: account.color, marginBottom: 6, letterSpacing: ".1em", textTransform: "uppercase" }}>
+                          {account.dest}
                         </div>
-                        {card.minPayment > 0 ? (
-                          <div style={{ fontSize: 11, color: "#22c55e", fontWeight: 700 }}>✅ Min set</div>
-                        ) : (
-                          <div style={{ fontSize: 11, color: "#f59e0b" }}>⏳ Enter minimum</div>
-                        )}
+                        {account.items.filter((item) => item.amount > 0).map((item) => (
+                          <div key={item.label} className="bill-row row-between">
+                            <span style={{ fontSize: 12, color: "#999" }}>{item.label}</span>
+                            <span style={{ fontSize: 13, color: account.color, fontWeight: 700 }}>{fmt(item.amount)}</span>
+                          </div>
+                        ))}
                       </div>
+                    ))}
+                  </div>
 
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 10, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>
-                          Statement Balance
+                  <div className="card">
+                    <div className="sec-title">Credit Card Statements</div>
+                    {state.creditCards.map((card) => {
+                      const statement = state.ccStatements?.[card.id] || 0;
+                      return (
+                        <div key={card.id} style={{ marginBottom: 14 }}>
+                          <div className="row-between" style={{ marginBottom: 4 }}>
+                            <div>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: "#ddd" }}>{card.label}</span>
+                              <div style={{ fontSize: 10, color: "#555", marginTop: 1 }}>Half target {fmt(statement / 2)}</div>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: card.color }}>{fmt(statement)}</div>
+                              <div style={{ fontSize: 10, color: "#444", marginTop: 1 }}>statement balance</div>
+                            </div>
+                          </div>
+                          <ProgressBar value={statement / 2} max={statement || 1} color={card.color} showAmounts={false} />
                         </div>
-                        <MoneyInput
-                          label="Statement Balance"
-                          value={stmtBal}
-                          onChange={(value) =>
-                            setState((prev) => ({
-                              ...prev,
-                              ccStatements: { ...(prev.ccStatements || {}), [card.id]: value }
-                            }))
-                          }
-                          color={card.color || "#3b82f6"}
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "adjust" ? (
+                <>
+                  <div style={{ padding: "12px 12px 0" }}>
+                    <div className="mode-tab">
+                      <button className={`mode-btn${payMode === "p1" ? " active" : ""}`} onClick={() => setPayMode("p1")}>Paycheck 1</button>
+                      <button className={`mode-btn${payMode === "p2" ? " active" : ""}`} onClick={() => setPayMode("p2")}>Paycheck 2</button>
+                    </div>
+                  </div>
+
+                  <div className="card card-gold">
+                    <div className="sec-title">Paycheck</div>
+                    <SliderRow label="Take-Home Pay" value={state.paycheck} onChange={(value) => setState((prev) => ({ ...prev, paycheck: value }))} min={1500} max={8000} step={25} color="#22c55e" />
+                  </div>
+
+                  {payMode === "p1" ? (
+                    <div className="card card-gold">
+                      <div className="sec-title">P1 Checking Buffer</div>
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>
+                          This amount is credited to P2&apos;s left-over (already funded by P1).
+                          Set to <strong style={{ color: "#c9a84c" }}>$0</strong> if nothing carries forward this cycle.
+                        </div>
+                        <input
+                          className="input"
+                          placeholder="What does this buffer represent?"
+                          value={state.p1BufferLabel || ""}
+                          onChange={(e) => setState((prev) => ({ ...prev, p1BufferLabel: e.target.value }))}
+                          style={{ fontSize: 12, marginBottom: 12 }}
                         />
                       </div>
+                      <SliderRow
+                        label={state.p1BufferLabel || "P1 Buffer"}
+                        value={state.p1Buffer || 0}
+                        onChange={(value) => setState((prev) => ({ ...prev, p1Buffer: value }))}
+                        min={0}
+                        max={300}
+                        step={1}
+                        color="#c9a84c"
+                      />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ marginTop: 4 }}
+                        onClick={() => setState((prev) => ({ ...prev, p1Buffer: 0 }))}
+                      >
+                        Zero Out Buffer
+                      </button>
+                    </div>
+                  ) : null}
 
-                      <div>
-                        <div style={{ fontSize: 10, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>
-                          Minimum Payment Due
+                  <div className="card">
+                    <div className="sec-title">Bills</div>
+                    {state.bills.filter((bill) => bill.active).map((bill) => (
+                      bill.id === "otherCarIns" ? (
+                        <React.Fragment key={bill.id}>
+                          <SliderRow
+                            label={bill.label}
+                            icon={bill.icon}
+                            value={bill.amount}
+                            onChange={(value) => updateBill(bill.id, value)}
+                            min={0}
+                            max={Math.max(bill.amount * 2.5, 300)}
+                            step={1}
+                            color={accent}
+                          />
+                          <div style={{ marginTop: -10, marginBottom: 14, paddingLeft: 4 }}>
+                            <input
+                              className="input"
+                              placeholder="What is this allocation for?"
+                              value={bill.label}
+                              onChange={(e) =>
+                                setState((prev) => ({
+                                  ...prev,
+                                  bills: prev.bills.map((b) =>
+                                    b.id === "otherCarIns" ? { ...b, label: e.target.value } : b
+                                  )
+                                }))
+                              }
+                              style={{ fontSize: 12, padding: "6px 12px", color: "#aaa" }}
+                            />
+                          </div>
+                        </React.Fragment>
+                      ) : (
+                        <SliderRow
+                          key={bill.id}
+                          label={bill.label}
+                          icon={bill.icon}
+                          value={bill.amount}
+                          onChange={(value) => updateBill(bill.id, value)}
+                          min={0}
+                          max={Math.max(bill.amount * 2.5, 300)}
+                          step={1}
+                          color={bill.account === "fidelity" ? "#3b82f6" : accent}
+                        />
+                      )
+                    ))}
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Investments</div>
+                    {state.investments.filter((investment) => investment.active).map((investment) => {
+                      const amount = getInvestmentAmount(investment, state.paycheck);
+                      const label = getInvestmentLabel(investment);
+                      return (
+                        <SliderRow key={investment.id} label={label} icon={investment.icon} value={amount} onChange={(value) => updateInvest(investment.id, value)} min={0} max={1000} step={10} color={accent} />
+                      );
+                    })}
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">CC Debit Acct</div>
+                    <SliderRow label="CC Debit Transfer" value={state.ccDebitAcct} onChange={(value) => setState((prev) => ({ ...prev, ccDebitAcct: value }))} min={0} max={3500} step={25} color="#8b5cf6" />
+                    <div style={{ fontSize: 11, color: "#555" }}>
+                      Target this cycle: <span style={{ color: accent, fontWeight: 700 }}>{fmt(ccPlan.perCycle)}</span>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Toggle Bills On / Off</div>
+                    {state.bills.map((bill) => (
+                      <div key={bill.id} className="bill-row row-between">
+                        <span style={{ fontSize: 13, color: bill.active ? "#e0e0e0" : "#444" }}>{bill.icon} {bill.label}</span>
+                        <Toggle checked={bill.active} onChange={() => toggleBill(bill.id)} color={accent} />
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "scenarios" ? (
+                <>
+                  <div className="card card-gold">
+                    <div className="sec-title">Save Snapshot</div>
+                    <div className="row" style={{ gap: 8 }}>
+                      <input className="input" placeholder="Scenario name..." value={scenarioName} onChange={(event) => setScenarioName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && saveScenario()} style={{ flex: 1 }} />
+                      <button className="btn btn-primary" onClick={saveScenario}>Save</button>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Quick Presets</div>
+                    {[
+                      { label: "Cut Packery → Travel Fund", action: () => { updateBill("packery", 0); updateInvest("travelFund", (state.investments.find((investment) => investment.id === "travelFund")?.amount || 0) + 75); showToast("Packery cut → Travel Fund +$75"); } },
+                      { label: "Emergency: Zero Investments", action: () => state.investments.forEach((investment) => updateInvest(investment.id, 0)) },
+                      { label: "Max Brazil Savings", action: () => { const amount = Math.max(0, totals.leftover - 50); updateInvest("travelFund", (state.investments.find((investment) => investment.id === "travelFund")?.amount || 0) + amount); showToast(`+${fmt(amount)} to Travel Fund`); } }
+                    ].map((preset) => (
+                      <button key={preset.label} onClick={preset.action} className="btn btn-ghost" style={{ width: "100%", justifyContent: "flex-start", marginBottom: 6 }}>
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Saved Scenarios</div>
+                    {(state.scenarios || []).length === 0 ? (
+                      <div style={{ fontSize: 12, color: "#666" }}>No scenarios yet.</div>
+                    ) : (state.scenarios || []).map((scenario) => {
+                      const scenarioLeftover = getScenarioLeftoverDisplay(scenario.leftover);
+                      return (
+                        <div key={scenario.id} className="bill-row row-between">
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#e0e0e0" }}>{scenario.name}</div>
+                            <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>
+                              {scenario.savedAt} · {fmt(scenario.paycheck)} ·{" "}
+                              <span style={{ color: scenarioLeftover.color }}>{scenarioLeftover.text}</span>
+                              <span style={{ color: "#444" }}> · full allocation view</span>
+                            </div>
+                          </div>
+                          <div className="row" style={{ gap: 6 }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => loadScenario(scenario)}>Load</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => deleteScenario(scenario.id)}>✕</button>
+                          </div>
                         </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
+
+              {activeTab === "goals" ? (
+                <>
+                  <div className="card card-gold">
+                    <div className="sec-title">Travel / Cashback Account</div>
+                    <div style={{ marginBottom: 12 }}>
+                      <span style={{ fontSize: 36, fontWeight: 900, color: accent }}>{fmt(ccPlan.tc.balance)}</span>
+                    </div>
+                    <MoneyInput label="Account Balance" value={ccPlan.tc.balance} onChange={(value) => setState((prev) => ({ ...prev, travelCashback: { ...prev.travelCashback, balance: value } }))} color={accent} />
+                    <MoneyInput label="CC Debit Acct Balance" value={state.ccDebitBalance || 0} onChange={(value) => setState((prev) => ({ ...prev, ccDebitBalance: value }))} color="#8b5cf6" />
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">CC Statement Planner</div>
+                    {state.creditCards.map((card) => (
+                      <MoneyInput
+                        key={card.id}
+                        label={`${card.label} Statement`}
+                        value={state.ccStatements?.[card.id] || 0}
+                        onChange={(value) => updateCCStat(card.id, value)}
+                        color={card.color}
+                        note={`÷ 2 = ${fmt((state.ccStatements?.[card.id] || 0) / 2)}/cycle`}
+                      />
+                    ))}
+                  </div>
+
+                  {goalInfo.map((goal, index) => (
+                    <div key={goal.id} className="card card-gold" style={{ borderTopColor: `${goal.color}44` }}>
+                      <div className="row-between" style={{ marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <input value={goal.icon || "🎯"} onChange={(event) => setState((prev) => {
+                            const items = [...prev.goals];
+                            items[index] = { ...items[index], icon: event.target.value };
+                            return { ...prev, goals: items };
+                          })} style={{ background: "transparent", border: "none", fontSize: 20, width: 36, outline: "none" }} maxLength={4} />
+                          <input value={goal.label} onChange={(event) => setState((prev) => {
+                            const items = [...prev.goals];
+                            items[index] = { ...items[index], label: event.target.value };
+                            return { ...prev, goals: items };
+                          })} style={{ background: "transparent", border: "none", borderBottom: "1px solid #333", color: "#ddd", fontSize: 13, fontWeight: 700, outline: "none", padding: "2px 0", width: 160 }} />
+                        </div>
+                        <button className="btn btn-danger btn-sm" onClick={() => setState((prev) => ({ ...prev, goals: prev.goals.filter((_, itemIndex) => itemIndex !== index) }))}>Delete</button>
+                      </div>
+                      <ProgressBar value={goal.saved || 0} max={goal.target || 1} color={goal.color || accent} label={goal.label} />
+                      <SliderRow label="Goal Amount" value={goal.target || 0} onChange={(value) => setState((prev) => {
+                        const items = [...prev.goals];
+                        items[index] = { ...items[index], target: value };
+                        return { ...prev, goals: items };
+                      })} min={100} max={10000} step={100} color={goal.color || accent} />
+                      <SliderRow label="Already Saved" value={goal.saved || 0} onChange={(value) => setState((prev) => {
+                        const items = [...prev.goals];
+                        items[index] = { ...items[index], saved: value };
+                        return { ...prev, goals: items };
+                      })} min={0} max={goal.target || 10000} step={25} color="#22c55e" />
+                    </div>
+                  ))}
+
+                  <div className="card card-gold">
+                    <div className="sec-title">Chase Checking</div>
+                    <div style={{ marginBottom: 12 }}>
+                      <span style={{ fontSize: 36, fontWeight: 900, color: health.color }}>
+                        {(state.chaseChecking || 0) < 0 ? "-" : ""}{fmt(Math.abs(state.chaseChecking || 0))}
+                      </span>
+                    </div>
+                    <MoneyInput
+                      label="Chase Checking Balance"
+                      value={state.chaseChecking || 0}
+                      onChange={(value) => setState((prev) => ({ ...prev, chaseChecking: value }))}
+                      color="#22c55e"
+                      note="Enter how much is currently sitting in your Chase account"
+                    />
+
+                    <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: `${health.bg}`, border: `1px solid ${health.border}` }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: effectiveLeft < 0 ? 10 : 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: health.color, letterSpacing: ".04em", textTransform: "uppercase" }}>
+                          {health.emoji} {health.label}
+                        </span>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: health.color }}>
+                          {effectiveLeft >= 0 ? "+" : ""}{fmt(effectiveLeft)}
+                        </span>
+                      </div>
+
+                      {effectiveLeft < 0 ? (
+                        <div>
+                          <div style={{ fontSize: 11, color: "#aaa", marginBottom: 8 }}>
+                            Deposit <strong style={{ color: "#ef4444" }}>{fmt(Math.abs(effectiveLeft))}</strong> into Chase to break even.
+                            Or deposit more to reach a buffer:
+                          </div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) }))}
+                              style={{ fontSize: 11, borderColor: "rgba(239,68,68,.3)", color: "#ef4444" }}
+                            >
+                              Break Even {fmt(Math.abs(modeLeftover))}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) + 100 }))}
+                              style={{ fontSize: 11, borderColor: "rgba(249,115,22,.3)", color: "#f97316" }}
+                            >
+                              +$100 Buffer
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setState((prev) => ({ ...prev, chaseChecking: Math.abs(modeLeftover) + 250 }))}
+                              style={{ fontSize: 11, borderColor: "rgba(234,179,8,.3)", color: "#eab308" }}
+                            >
+                              +$250 Buffer
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11, color: "#555", marginTop: effectiveLeft < 150 ? 4 : 0 }}>
+                          {effectiveLeft < 50
+                            ? "Very tight — consider adding a buffer before bills post."
+                            : effectiveLeft < 150
+                              ? "OK but thin — a small buffer is recommended."
+                              : "Covered. You have room to absorb unexpected charges."}
+                        </div>
+                      )}
+                    </div>
+
+                    {(state.travelCashback?.balance || 0) > 0 ? (
+                      <div style={{ marginTop: 10, fontSize: 11, color: "#555" }}>
+                        Chase + Travel Cashback:{" "}
+                        <span style={{ color: "#22c55e", fontWeight: 700 }}>
+                          {fmt((state.chaseChecking || 0) + (state.travelCashback?.balance || 0))}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <button onClick={() => setState((prev) => ({ ...prev, goals: [...(prev.goals || []), { id: `goal_${Date.now()}`, label: "New Goal", icon: "🎯", target: 1000, saved: 0, targetDate: "", color: "#c9a84c" }] }))} style={{ width: "calc(100% - 24px)", margin: "0 12px 10px", padding: "12px", background: "rgba(255,255,255,.03)", border: "1px dashed #2a2a2a", borderRadius: 12, color: "#555", fontSize: 12, fontWeight: 700, letterSpacing: ".06em", cursor: "pointer" }}>
+                    + ADD GOAL
+                  </button>
+                </>
+              ) : null}
+
+              {activeTab === "ccpayments" ? (() => {
+                const totalMinimums = (state.creditCards || []).reduce((sum, card) => sum + (card.minPayment || 0), 0);
+                const ccDebitBal = state.ccDebitBalance || 0;
+                const shortfall = totalMinimums - ccDebitBal;
+                const fullyFunded = ccDebitBal >= totalMinimums;
+
+                return (
+                  <div className="cc-shell">
+                    <div className="card card-gold">
+                      <div className="sec-title">💳 CC Minimum Payment Planner</div>
+                      <p className="cc-subtle" style={{ marginBottom: 16 }}>
+                        Fund your CC Debit account from P1 so all minimum payments clear on time.
+                        Enter each card&apos;s minimum after your statement closes, then set your payment date.
+                      </p>
+
+                      <div className="cc-field-wrap">
+                        <div className="cc-field-label">Scheduled Payment Date</div>
+                        <input
+                          type="date"
+                          className="input"
+                          value={state.ccPaymentDate || ""}
+                          onChange={(event) => setState((prev) => ({ ...prev, ccPaymentDate: event.target.value }))}
+                        />
+                        {state.ccPaymentDate ? (
+                          <div className="date-chip">
+                            📅 All 4 cards paid on{" "}
+                            {new Date(`${state.ccPaymentDate}T12:00:00`).toLocaleDateString("en-US", {
+                              weekday: "long",
+                              month: "long",
+                              day: "numeric",
+                              year: "numeric"
+                            })}
+                          </div>
+                        ) : (
+                          <div className="date-hint">Set a date to see your payment countdown</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="sec-title" style={{ marginBottom: 2 }}>Your Cards</div>
+
+                    {(state.creditCards || []).map((card) => {
+                      const stmtBal = (state.ccStatements || {})[card.id] || 0;
+
+                      return (
+                        <div
+                          key={card.id}
+                          className="card cc-card"
+                          style={{ borderLeft: `3px solid ${card.color || "#3b82f6"}` }}
+                        >
+                          <div className="cc-card-title">
+                            <div className="cc-card-label">
+                              <div className="cc-card-dot" style={{ background: card.color || "#3b82f6" }} />
+                              <span className="cc-card-name">{card.label}</span>
+                            </div>
+                            {card.minPayment > 0 ? (
+                              <div className="cc-card-status" style={{ color: "#22c55e" }}>✅ Min set</div>
+                            ) : (
+                              <div className="cc-card-status" style={{ color: "#f59e0b" }}>⏳ Enter minimum</div>
+                            )}
+                          </div>
+
+                          <div className="cc-field-wrap">
+                            <div className="cc-field-label">Statement Balance</div>
+                            <MoneyInput
+                              label="Statement Balance"
+                              value={stmtBal}
+                              onChange={(value) =>
+                                setState((prev) => ({
+                                  ...prev,
+                                  ccStatements: { ...(prev.ccStatements || {}), [card.id]: value }
+                                }))
+                              }
+                              color={card.color || "#3b82f6"}
+                            />
+                          </div>
+
+                          <div className="cc-field-wrap">
+                            <div className="cc-field-label">Minimum Payment Due</div>
+                            <MoneyInput
+                              label="Minimum Due"
+                              value={card.minPayment || 0}
+                              onChange={(value) =>
+                                setState((prev) => ({
+                                  ...prev,
+                                  creditCards: (prev.creditCards || []).map((current) =>
+                                    current.id === card.id ? { ...current, minPayment: value } : current
+                                  )
+                                }))
+                              }
+                              color={card.color || "#3b82f6"}
+                              note="Enter minimum from your statement after it closes"
+                            />
+                          </div>
+
+                          {stmtBal > 0 && card.minPayment > 0 ? (
+                            <div className="cc-subtle">
+                              Min = {((card.minPayment / stmtBal) * 100).toFixed(1)}% of statement balance
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+
+                    <div className="card card-gold">
+                      <div className="sec-title" style={{ marginBottom: 16 }}>💰 Fund Coverage</div>
+
+                      <div className="metric-row">
+                        <span style={{ fontSize: 13, color: "#aaa" }}>Total Minimums Due</span>
+                        <span style={{ fontSize: 18, fontWeight: 900, color: "#e2e8f0" }}>{fmt(totalMinimums)}</span>
+                      </div>
+
+                      <div className="metric-row">
+                        <span style={{ fontSize: 13, color: "#aaa" }}>CC Debit Account Balance</span>
+                        <span style={{ fontSize: 18, fontWeight: 900, color: "#3b82f6" }}>{fmt(ccDebitBal)}</span>
+                      </div>
+
+                      <div
+                        className="coverage-panel"
+                        style={{
+                          background: fullyFunded ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                          border: `1px solid ${fullyFunded ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`
+                        }}
+                      >
+                        {totalMinimums === 0 ? (
+                          <>
+                            <div style={{ fontSize: 22 }}>⏳</div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: "#f59e0b", marginTop: 4 }}>
+                              Enter minimums above to check coverage
+                            </div>
+                          </>
+                        ) : fullyFunded ? (
+                          <>
+                            <div style={{ fontSize: 22 }}>✅</div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: "#22c55e", marginTop: 4 }}>Fully Funded</div>
+                            <div style={{ fontSize: 11, color: "#97a1b2", marginTop: 4 }}>
+                              CC Debit covers all minimums with {fmt(ccDebitBal - totalMinimums)} to spare
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 22 }}>❌</div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: "#ef4444", marginTop: 4 }}>
+                              Short {fmt(shortfall)}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#b8c1cf", marginTop: 4 }}>
+                              Transfer {fmt(shortfall)} more to CC Debit to cover all minimums
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="card transfer-reminder">
+                      <div className="sec-title" style={{ marginBottom: 12 }}>📋 Transfer Reminder</div>
+                      <div className="transfer-reminder-copy">
+                        <div>
+                          <span style={{ color: "#7f8a9b" }}>Amount needed in CC Debit by payment date: </span>
+                          <span style={{ color: "#c9a84c", fontWeight: 700 }}>{fmt(totalMinimums)}</span>
+                        </div>
+                        <div>
+                          <span style={{ color: "#7f8a9b" }}>Funded from P1 paycheck allocation: </span>
+                          <span style={{ color: "#3b82f6", fontWeight: 700 }}>{fmt(state.ccDebitAcct || 0)}</span>
+                        </div>
+                        {state.ccPaymentDate ? (
+                          <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.2)", fontSize: 12, color: "#b3bfce" }}>
+                            💡 Schedule payment on{" "}
+                            <strong style={{ color: "#c9a84c" }}>
+                              {new Date(`${state.ccPaymentDate}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            </strong>{" "}
+                            after Fidelity collection finalizes to ensure all 4 cards clear without a missed payment.
+                          </div>
+                        ) : (
+                          <div className="date-hint">Set a payment date above to see your full transfer reminder.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })() : null}
+
+              {activeTab === "settings" ? (
+                <>
+                  <div className="card">
+                    <div className="sec-title">Theme</div>
+                    <div className="h-scroll">
+                      {Object.keys(THEMES).map((themeKey) => (
+                        <button key={themeKey} onClick={() => setState((prev) => ({ ...prev, theme: themeKey }))} className="btn btn-ghost btn-sm" style={{ flexShrink: 0, borderColor: state.theme === themeKey ? accent : "rgba(255,255,255,.07)", color: state.theme === themeKey ? accent : "#666" }}>
+                          {themeKey}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Accent Color</div>
+                    <div className="row" style={{ flexWrap: "wrap", gap: 10, marginTop: 4 }}>
+                      {ACCENT_COLORS.map((color) => (
+                        <div key={color} className={`theme-dot${state.accentColor === color ? " selected" : ""}`} style={{ background: color }} onClick={() => setState((prev) => ({ ...prev, accentColor: color }))} />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Edit Bill Labels</div>
+                    {state.bills.map((bill) => (
+                      <div key={bill.id} style={{ marginBottom: 8 }}>
+                        <div className="row" style={{ gap: 8 }}>
+                          <span style={{ fontSize: 18, flexShrink: 0 }}>{bill.icon}</span>
+                          <input className="input" value={bill.label} onChange={(event) => setState((prev) => ({ ...prev, bills: prev.bills.map((item) => item.id === bill.id ? { ...item, label: event.target.value } : item) }))} style={{ flex: 1, fontSize: 13 }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Pay Period Start</div>
+                    <input type="date" className="input" value={state.payStartDate} onChange={(event) => setState((prev) => ({ ...prev, payStartDate: event.target.value }))} />
+                  </div>
+
+                  <div className="card card-gold">
+                    <div className="sec-title">Quick Update Fields</div>
+                    <MoneyInput
+                      label={state.bills.find((bill) => bill.id === "rent")?.label || "Rent"}
+                      value={state.bills.find((bill) => bill.id === "rent")?.amount || 0}
+                      onChange={(value) => updateBill("rent", value)}
+                      color={accent}
+                    />
+                    {state.creditCards.map((card) => (
+                      <MoneyInput
+                        key={card.id}
+                        label={`${card.label} Statement`}
+                        value={state.ccStatements?.[card.id] || 0}
+                        onChange={(value) => updateCCStat(card.id, value)}
+                        color={card.color}
+                        note={`÷ 2 = ${fmt((state.ccStatements?.[card.id] || 0) / 2)}/cycle`}
+                      />
+                    ))}
+                    <MoneyInput
+                      label="Travel Cashback"
+                      value={state.travelCashback?.balance || 0}
+                      onChange={(value) => setState((prev) => ({ ...prev, travelCashback: { ...prev.travelCashback, balance: value } }))}
+                      color={accent}
+                    />
+                    <MoneyInput
+                      label="CC Debit Balance"
+                      value={state.ccDebitBalance || 0}
+                      onChange={(value) => setState((prev) => ({ ...prev, ccDebitBalance: value }))}
+                      color="#8b5cf6"
+                    />
+                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ fontSize: 10, color: "#555", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>
+                        CC Minimums
+                      </div>
+                      {(state.creditCards || []).map((card) => (
                         <MoneyInput
-                          label="Minimum Due"
+                          key={card.id}
+                          label={`${card.label} — Min Due`}
                           value={card.minPayment || 0}
                           onChange={(value) =>
                             setState((prev) => ({
@@ -1182,414 +1397,146 @@ export default function DashboardApp({ initialDashboard, initialAudit, user }) {
                             }))
                           }
                           color={card.color || "#3b82f6"}
-                          note="Enter minimum from your statement after it closes"
                         />
-                      </div>
-
-                      {stmtBal > 0 && card.minPayment > 0 ? (
-                        <div style={{ marginTop: 6, fontSize: 11, color: "#444" }}>
-                          Min = {((card.minPayment / stmtBal) * 100).toFixed(1)}% of statement balance
-                        </div>
-                      ) : null}
+                      ))}
                     </div>
-                  );
-                })}
-
-                <div className="card card-gold" style={{ marginBottom: 16 }}>
-                  <div className="sec-title" style={{ marginBottom: 16 }}>💰 Fund Coverage</div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <span style={{ fontSize: 13, color: "#aaa" }}>Total Minimums Due</span>
-                    <span style={{ fontSize: 18, fontWeight: 900, color: "#e2e8f0" }}>{fmt(totalMinimums)}</span>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <span style={{ fontSize: 13, color: "#aaa" }}>CC Debit Account Balance</span>
-                    <span style={{ fontSize: 18, fontWeight: 900, color: "#3b82f6" }}>{fmt(ccDebitBal)}</span>
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: 12,
-                      padding: "12px 16px",
-                      borderRadius: 10,
-                      background: fullyFunded ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
-                      border: `1px solid ${fullyFunded ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
-                      textAlign: "center"
-                    }}
-                  >
-                    {totalMinimums === 0 ? (
-                      <>
-                        <div style={{ fontSize: 22 }}>⏳</div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: "#f59e0b", marginTop: 4 }}>
-                          Enter minimums above to check coverage
-                        </div>
-                      </>
-                    ) : fullyFunded ? (
-                      <>
-                        <div style={{ fontSize: 22 }}>✅</div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: "#22c55e", marginTop: 4 }}>Fully Funded</div>
-                        <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
-                          CC Debit covers all minimums with {fmt(ccDebitBal - totalMinimums)} to spare
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ fontSize: 22 }}>❌</div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: "#ef4444", marginTop: 4 }}>
-                          Short {fmt(shortfall)}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>
-                          Transfer {fmt(shortfall)} more to CC Debit to cover all minimums
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className="card" style={{ marginBottom: 24, borderLeft: "3px solid #c9a84c" }}>
-                  <div className="sec-title" style={{ marginBottom: 12 }}>📋 Transfer Reminder</div>
-                  <div style={{ fontSize: 13, color: "#aaa", lineHeight: 1.9 }}>
-                    <div>
-                      <span style={{ color: "#666" }}>Amount needed in CC Debit by payment date: </span>
-                      <span style={{ color: "#c9a84c", fontWeight: 700 }}>{fmt(totalMinimums)}</span>
-                    </div>
-                    <div>
-                      <span style={{ color: "#666" }}>Funded from P1 paycheck allocation: </span>
-                      <span style={{ color: "#3b82f6", fontWeight: 700 }}>{fmt(state.ccDebitAcct || 0)}</span>
-                    </div>
-                    {state.ccPaymentDate ? (
-                      <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.2)", fontSize: 12, color: "#aaa" }}>
-                        💡 Schedule payment on{" "}
-                        <strong style={{ color: "#c9a84c" }}>
-                          {new Date(`${state.ccPaymentDate}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                        </strong>{" "}
-                        after Fidelity collection finalizes to ensure all 4 cards clear without a missed payment.
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 8, fontSize: 11, color: "#555" }}>
-                        Set a payment date above to see your full transfer reminder.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })() : null}
-
-          {activeTab === "settings" ? (
-            <>
-              <div className="card">
-                <div className="sec-title">Theme</div>
-                <div className="h-scroll">
-                  {Object.keys(THEMES).map((themeKey) => (
-                    <button key={themeKey} onClick={() => setState((prev) => ({ ...prev, theme: themeKey }))} className="btn btn-ghost btn-sm" style={{ flexShrink: 0, borderColor: state.theme === themeKey ? accent : "rgba(255,255,255,.07)", color: state.theme === themeKey ? accent : "#666" }}>
-                      {themeKey}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Accent Color</div>
-                <div className="row" style={{ flexWrap: "wrap", gap: 10, marginTop: 4 }}>
-                  {ACCENT_COLORS.map((color) => (
-                    <div key={color} className={`theme-dot${state.accentColor === color ? " selected" : ""}`} style={{ background: color }} onClick={() => setState((prev) => ({ ...prev, accentColor: color }))} />
-                  ))}
-                </div>
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Edit Bill Labels</div>
-                {state.bills.map((bill) => (
-                  <div key={bill.id} style={{ marginBottom: 8 }}>
-                    <div className="row" style={{ gap: 8 }}>
-                      <span style={{ fontSize: 18, flexShrink: 0 }}>{bill.icon}</span>
-                      <input className="input" value={bill.label} onChange={(event) => setState((prev) => ({ ...prev, bills: prev.bills.map((item) => item.id === bill.id ? { ...item, label: event.target.value } : item) }))} style={{ flex: 1, fontSize: 13 }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Pay Period Start</div>
-                <input type="date" className="input" value={state.payStartDate} onChange={(event) => setState((prev) => ({ ...prev, payStartDate: event.target.value }))} />
-              </div>
-
-              <div className="card card-gold">
-                <div className="sec-title">Quick Update Fields</div>
-                <MoneyInput
-                  label={state.bills.find((bill) => bill.id === "rent")?.label || "Rent"}
-                  value={state.bills.find((bill) => bill.id === "rent")?.amount || 0}
-                  onChange={(value) => updateBill("rent", value)}
-                  color={accent}
-                />
-                {state.creditCards.map((card) => (
-                  <MoneyInput
-                    key={card.id}
-                    label={`${card.label} Statement`}
-                    value={state.ccStatements?.[card.id] || 0}
-                    onChange={(value) => updateCCStat(card.id, value)}
-                    color={card.color}
-                    note={`÷ 2 = ${fmt((state.ccStatements?.[card.id] || 0) / 2)}/cycle`}
-                  />
-                ))}
-                <MoneyInput
-                  label="Travel Cashback"
-                  value={state.travelCashback?.balance || 0}
-                  onChange={(value) => setState((prev) => ({ ...prev, travelCashback: { ...prev.travelCashback, balance: value } }))}
-                  color={accent}
-                />
-                <MoneyInput
-                  label="CC Debit Balance"
-                  value={state.ccDebitBalance || 0}
-                  onChange={(value) => setState((prev) => ({ ...prev, ccDebitBalance: value }))}
-                  color="#8b5cf6"
-                />
-                <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                  <div style={{ fontSize: 10, color: "#555", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>
-                    CC Minimums
-                  </div>
-                  {(state.creditCards || []).map((card) => (
                     <MoneyInput
-                      key={card.id}
-                      label={`${card.label} — Min Due`}
-                      value={card.minPayment || 0}
-                      onChange={(value) =>
-                        setState((prev) => ({
-                          ...prev,
-                          creditCards: (prev.creditCards || []).map((current) =>
-                            current.id === card.id ? { ...current, minPayment: value } : current
-                          )
-                        }))
+                      label="Chase Checking"
+                      value={state.chaseChecking || 0}
+                      onChange={(value) => setState((prev) => ({ ...prev, chaseChecking: value }))}
+                      color={health.color}
+                      note={
+                        effectiveLeft < 0
+                          ? `⚠️ Enter at least ${fmt(Math.abs(modeLeftover))} to break even`
+                          : `${health.emoji} ${health.label} · ${fmt(effectiveLeft)} remaining`
                       }
-                      color={card.color || "#3b82f6"}
                     />
-                  ))}
-                </div>
-                <MoneyInput
-                  label="Chase Checking"
-                  value={state.chaseChecking || 0}
-                  onChange={(value) => setState((prev) => ({ ...prev, chaseChecking: value }))}
-                  color={health.color}
-                  note={
-                    effectiveLeft < 0
-                      ? `⚠️ Enter at least ${fmt(Math.abs(modeLeftover))} to break even`
-                      : `${health.emoji} ${health.label} · ${fmt(effectiveLeft)} remaining`
-                  }
-                />
-                <MoneyInput
-                  label={state.p1BufferLabel || "P1 Buffer"}
-                  value={state.p1Buffer || 0}
-                  onChange={(value) => setState((prev) => ({ ...prev, p1Buffer: value }))}
-                  color="#c9a84c"
-                  note="Credit to P2 left-over from P1"
-                />
-              </div>
-
-              <div className="card">
-                <div className="sec-title">Dispatch Commands</div>
-                <div className="alert-gold" style={{ fontSize: 11, color: "#c9a84c", marginBottom: 10, letterSpacing: ".02em" }}>
-                  Send from your phone to update instantly:
-                </div>
-                {dispatchCommands.map((item) => (
-                  <div key={item.command} className="bill-row">
-                    <div>
-                      <code style={{ fontSize: 11, color: "#c9a84c", background: "rgba(201,168,76,.08)", border: "1px solid rgba(201,168,76,.2)", padding: "2px 8px", borderRadius: 5, letterSpacing: ".04em" }}>{item.command}</code>
-                      <div style={{ fontSize: 11, color: "#555", marginTop: 4, letterSpacing: ".02em" }}>{item.description}</div>
-                    </div>
+                    <MoneyInput
+                      label={state.p1BufferLabel || "P1 Buffer"}
+                      value={state.p1Buffer || 0}
+                      onChange={(value) => setState((prev) => ({ ...prev, p1Buffer: value }))}
+                      color="#c9a84c"
+                      note="Credit to P2 left-over from P1"
+                    />
                   </div>
-                ))}
-              </div>
 
-              <div className="card">
-                <div className="sec-title">Goal Labels And Figures</div>
-                {(state.goals || []).map((goal, index) => (
-                  <div key={goal.id} style={{ marginBottom: index === state.goals.length - 1 ? 0 : 18 }}>
-                    <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-                      <input
-                        className="input"
-                        value={goal.icon || "🎯"}
-                        onChange={(event) => setState((prev) => {
-                          const items = [...prev.goals];
-                          items[index] = { ...items[index], icon: event.target.value };
-                          return { ...prev, goals: items };
-                        })}
-                        style={{ width: 64, textAlign: "center", paddingInline: 10 }}
-                        maxLength={4}
-                      />
-                      <input
-                        className="input"
-                        value={goal.label || ""}
-                        onChange={(event) => setState((prev) => {
-                          const items = [...prev.goals];
-                          items[index] = { ...items[index], label: event.target.value };
-                          return { ...prev, goals: items };
-                        })}
-                        style={{ flex: 1 }}
-                        placeholder="Goal label"
-                      />
+                  <div className="card">
+                    <div className="sec-title">Dispatch Commands</div>
+                    <div className="alert-gold" style={{ fontSize: 11, color: "#c9a84c", marginBottom: 10, letterSpacing: ".02em" }}>
+                      Send from your phone to update instantly:
                     </div>
-                    <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-                      <input
-                        type="date"
-                        className="input"
-                        value={goal.targetDate || ""}
-                        onChange={(event) => setState((prev) => {
-                          const items = [...prev.goals];
-                          items[index] = { ...items[index], targetDate: event.target.value };
-                          return { ...prev, goals: items };
-                        })}
-                        style={{ flex: 1 }}
-                      />
-                      <div style={{ minWidth: 112, fontSize: 10, color: "#666", textTransform: "uppercase", letterSpacing: ".08em", alignSelf: "center" }}>
-                        Command: {toCommandLabel(goal.label, "goal")}
+                    {dispatchCommands.map((item) => (
+                      <div key={item.command} className="bill-row">
+                        <div>
+                          <code style={{ fontSize: 11, color: "#c9a84c", background: "rgba(201,168,76,.08)", border: "1px solid rgba(201,168,76,.2)", padding: "2px 8px", borderRadius: 5, letterSpacing: ".04em" }}>{item.command}</code>
+                          <div style={{ fontSize: 11, color: "#555", marginTop: 4, letterSpacing: ".02em" }}>{item.description}</div>
+                        </div>
                       </div>
-                    </div>
-                    <MoneyInput
-                      label="Target Amount"
-                      value={goal.target || 0}
-                      onChange={(value) => setState((prev) => {
-                        const items = [...prev.goals];
-                        items[index] = { ...items[index], target: value };
-                        return { ...prev, goals: items };
-                      })}
-                      color={goal.color || accent}
-                    />
-                    <MoneyInput
-                      label="Saved Amount"
-                      value={goal.saved || 0}
-                      onChange={(value) => setState((prev) => {
-                        const items = [...prev.goals];
-                        items[index] = { ...items[index], saved: value };
-                        return { ...prev, goals: items };
-                      })}
-                      color="#22c55e"
-                    />
-                    {index !== state.goals.length - 1 ? <div className="divider" /> : null}
+                    ))}
                   </div>
-                ))}
-              </div>
 
-              <div className="card">
-                <div className="sec-title">Audit Trail</div>
-                {auditItems.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "#666" }}>No audit entries yet.</div>
-                ) : auditItems.map((item) => (
-                  <div key={item.id} className="bill-row row-between">
-                    <div>
-                      <div style={{ fontSize: 12, color: "#ddd", fontWeight: 700 }}>{item.actionType} · {item.fieldPath}</div>
-                      <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{new Date(item.createdAt).toLocaleString()}</div>
-                    </div>
+                  <div className="card">
+                    <div className="sec-title">Goal Labels And Figures</div>
+                    {(state.goals || []).map((goal, index) => (
+                      <div key={goal.id} style={{ marginBottom: index === state.goals.length - 1 ? 0 : 18 }}>
+                        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+                          <input
+                            className="input"
+                            value={goal.icon || "🎯"}
+                            onChange={(event) => setState((prev) => {
+                              const items = [...prev.goals];
+                              items[index] = { ...items[index], icon: event.target.value };
+                              return { ...prev, goals: items };
+                            })}
+                            style={{ width: 64, textAlign: "center", paddingInline: 10 }}
+                            maxLength={4}
+                          />
+                          <input
+                            className="input"
+                            value={goal.label || ""}
+                            onChange={(event) => setState((prev) => {
+                              const items = [...prev.goals];
+                              items[index] = { ...items[index], label: event.target.value };
+                              return { ...prev, goals: items };
+                            })}
+                            style={{ flex: 1 }}
+                            placeholder="Goal label"
+                          />
+                        </div>
+                        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+                          <input
+                            type="date"
+                            className="input"
+                            value={goal.targetDate || ""}
+                            onChange={(event) => setState((prev) => {
+                              const items = [...prev.goals];
+                              items[index] = { ...items[index], targetDate: event.target.value };
+                              return { ...prev, goals: items };
+                            })}
+                            style={{ flex: 1 }}
+                          />
+                          <div style={{ minWidth: 112, fontSize: 10, color: "#666", textTransform: "uppercase", letterSpacing: ".08em", alignSelf: "center" }}>
+                            Command: {toCommandLabel(goal.label, "goal")}
+                          </div>
+                        </div>
+                        <MoneyInput
+                          label="Target Amount"
+                          value={goal.target || 0}
+                          onChange={(value) => setState((prev) => {
+                            const items = [...prev.goals];
+                            items[index] = { ...items[index], target: value };
+                            return { ...prev, goals: items };
+                          })}
+                          color={goal.color || accent}
+                        />
+                        <MoneyInput
+                          label="Saved Amount"
+                          value={goal.saved || 0}
+                          onChange={(value) => setState((prev) => {
+                            const items = [...prev.goals];
+                            items[index] = { ...items[index], saved: value };
+                            return { ...prev, goals: items };
+                          })}
+                          color="#22c55e"
+                        />
+                        {index !== state.goals.length - 1 ? <div className="divider" /> : null}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
 
-              <div className="card">
-                <div className="sec-title">Data</div>
-                <button className="btn btn-ghost" style={{ width: "100%", marginBottom: 8 }} onClick={() => navigator.clipboard.writeText(JSON.stringify(state, null, 2)).then(() => showToast("Copied live data"))}>
-                  Copy Current State
-                </button>
-                <button className="btn btn-danger" style={{ width: "100%", marginBottom: 8 }} disabled={resetPending} onClick={resetFromServer}>
-                  {resetPending ? "Resetting..." : "Reset To Defaults"}
-                </button>
-                <button className="btn btn-ghost" style={{ width: "100%" }} disabled={logoutPending} onClick={logout}>
-                  {logoutPending ? "Signing Out..." : "Sign Out"}
-                </button>
-              </div>
-            </>
-          ) : null}
+                  <div className="card">
+                    <div className="sec-title">Audit Trail</div>
+                    {auditItems.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "#666" }}>No audit entries yet.</div>
+                    ) : auditItems.map((item) => (
+                      <div key={item.id} className="bill-row row-between">
+                        <div>
+                          <div style={{ fontSize: 12, color: "#ddd", fontWeight: 700 }}>{item.actionType} · {item.fieldPath}</div>
+                          <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{new Date(item.createdAt).toLocaleString()}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="card">
+                    <div className="sec-title">Data</div>
+                    <button className="btn btn-ghost" style={{ width: "100%", marginBottom: 8 }} onClick={() => navigator.clipboard.writeText(JSON.stringify(state, null, 2)).then(() => showToast("Copied live data"))}>
+                      Copy Current State
+                    </button>
+                    <button className="btn btn-danger" style={{ width: "100%", marginBottom: 8 }} disabled={resetPending} onClick={resetFromServer}>
+                      {resetPending ? "Resetting..." : "Reset To Defaults"}
+                    </button>
+                    <button className="btn btn-ghost" style={{ width: "100%" }} disabled={logoutPending} onClick={logout}>
+                      {logoutPending ? "Signing Out..." : "Sign Out"}
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </section>
         </div>
-
-        <div className="tabbar">
-          {[
-            { id: "overview", icon: "🏠", label: "Home" },
-            { id: "adjust", icon: "🎚", label: "Adjust" },
-            { id: "scenarios", icon: "⚡", label: "Plans" },
-            { id: "goals", icon: "🎯", label: "Goals" },
-            { id: "ccpayments", icon: "💳", label: "CC Payments" },
-            { id: "settings", icon: "⚙️", label: "Settings" }
-          ].map((tab) => (
-            <button key={tab.id} className={`tab-btn${activeTab === tab.id ? " active" : ""}`} onClick={() => setActiveTab(tab.id)}>
-              <span className="tab-icon">{tab.icon}</span>
-              <span>{tab.label}</span>
-            </button>
-          ))}
-        </div>
-
         {toast ? <Toast msg={toast} onDone={() => setToast(null)} /> : null}
       </div>
-
-      <style jsx global>{`
-        #root {
-          max-width: 480px;
-          margin: 0 auto;
-          padding: 0 0 88px;
-        }
-        .card {
-          background: linear-gradient(180deg, rgba(255,255,255,.025) 0%, transparent 100%);
-          border: 1px solid var(--border);
-          border-top-color: rgba(255,255,255,.09);
-          border-radius: var(--r);
-          padding: 16px 18px;
-          margin: 0 12px 10px;
-        }
-        .card-gold { border-top-color: rgba(201,168,76,.35) !important; }
-        .topbar { padding: 32px 18px 14px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 10px; }
-        .stat-card { background: linear-gradient(180deg, rgba(255,255,255,.03) 0%, transparent 100%); border: 1px solid var(--border); border-radius: var(--rs); padding: 12px 14px; }
-        .divider { height: 1px; background: var(--border); margin: 10px 0; }
-        .label-cap { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
-        .sec-title { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
-        .sec-title::before { content: ""; display: block; width: 3px; height: 13px; background: var(--gold); border-radius: 2px; flex-shrink: 0; }
-        .row { display: flex; align-items: center; gap: 8px; }
-        .row-between { display: flex; align-items: center; justify-content: space-between; }
-        .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
-        .progress-track { background: rgba(255,255,255,.06); border-radius: 4px; height: 5px; overflow: hidden; }
-        .progress-fill { height: 100%; border-radius: 4px; transition: width .5s cubic-bezier(.4,0,.2,1); }
-        .toggle-wrap { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-        .toggle-track { width: 42px; height: 24px; border-radius: 12px; position: relative; transition: background .2s; flex-shrink: 0; border: 1px solid rgba(255,255,255,.08); }
-        .toggle-thumb { width: 18px; height: 18px; border-radius: 9px; background: #fff; position: absolute; top: 2px; transition: left .2s; box-shadow: 0 1px 6px rgba(0,0,0,.6); }
-        .slider { -webkit-appearance: none; appearance: none; width: 100%; height: 3px; border-radius: 2px; outline: none; background: rgba(255,255,255,.1); }
-        .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 10px; background: var(--accent); cursor: pointer; box-shadow: 0 0 0 3px rgba(201,168,76,.2), 0 2px 8px rgba(0,0,0,.5); }
-        .num-input { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); border-radius: 7px; padding: 5px 10px; font-size: 14px; font-weight: 700; text-align: right; outline: none; color: var(--text); }
-        .num-input::-webkit-inner-spin-button, .num-input::-webkit-outer-spin-button { -webkit-appearance: none; }
-        .num-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(201,168,76,.15); }
-        .input { background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: var(--rs); padding: 10px 14px; color: var(--text); font-size: 14px; outline: none; width: 100%; transition: border-color .15s; }
-        .input:focus { border-color: var(--gold); }
-        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 18px; border-radius: var(--rs); border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; letter-spacing: .02em; }
-        .btn-primary { background: var(--gold); color: #0a0a0a; font-weight: 700; }
-        .btn-ghost { background: rgba(255,255,255,.05); color: var(--text); border: 1px solid var(--border); }
-        .btn-danger { background: rgba(239,68,68,.08); color: var(--red); border: 1px solid rgba(239,68,68,.25); }
-        .btn-sm { padding: 6px 12px; font-size: 12px; }
-        .tabbar { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: rgba(6,6,6,.92); backdrop-filter: blur(24px); border-top: 1px solid rgba(255,255,255,.07); display: flex; z-index: 100; padding-bottom: env(safe-area-inset-bottom,0); }
-        .tab-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 0 8px; border: none; background: transparent; cursor: pointer; position: relative; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); gap: 4px; transition: color .2s; }
-        .tab-btn.active { color: var(--gold); }
-        .tab-btn.active::after { content: ""; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 20px; height: 2px; background: var(--gold); border-radius: 1px; }
-        .tab-icon { font-size: 18px; line-height: 1; }
-        .alert-green { padding: 10px 14px; background: rgba(34,197,94,.07); border-radius: var(--rs); border-left: 2px solid var(--green); }
-        .alert-orange { padding: 10px 14px; background: rgba(249,115,22,.07); border-radius: var(--rs); border-left: 2px solid var(--orange); }
-        .bill-row { padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.04); display: flex; align-items: center; gap: 10px; }
-        .h-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
-        .h-scroll::-webkit-scrollbar { display: none; }
-        .theme-dot { width: 26px; height: 26px; border-radius: 13px; cursor: pointer; border: 2px solid transparent; transition: border-color .15s, transform .15s; }
-        .theme-dot.selected { border-color: var(--gold); transform: scale(1.15); }
-        .toast { position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%); background: rgba(15,15,15,.95); border: 1px solid var(--border-g); border-radius: 24px; padding: 10px 22px; font-size: 13px; font-weight: 600; color: var(--text); z-index: 200; box-shadow: 0 8px 32px rgba(0,0,0,.7); white-space: nowrap; }
-        .hero-number { font-size: 52px; font-weight: 900; letter-spacing: -.03em; line-height: 1; }
-        .health-pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; margin-top: 8px; border: 1px solid; }
-        .mode-tab { display: flex; background: rgba(255,255,255,.04); border-radius: 10px; padding: 3px; margin-bottom: 14px; }
-        .mode-btn { flex: 1; padding: 7px 0; border: none; border-radius: 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; transition: all .2s; background: transparent; color: var(--muted); }
-        .mode-btn.active { background: var(--gold); color: #0a0a0a; }
-        .animate-pop { animation: pop .18s ease; }
-        @keyframes pop {
-          0% { transform: scale(.98); opacity: 0; }
-          100% { transform: scale(1); opacity: 1; }
-        }
-        @media (max-width: 420px) {
-          .topbar { padding-top: 20px; }
-          .hero-number { font-size: 44px; }
-        }
-      `}</style>
     </>
   );
 }

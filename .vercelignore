@@ -1,0 +1,9 @@
+.git
+.env*
+.vercel
+.vercel-config
+.vercel-cache
+.npm-cache
+.DS_Store
+node_modules
+.next
